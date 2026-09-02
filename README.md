@@ -27,7 +27,9 @@ Milestone 1: the measurement, and only the measurement.
 - **Kill attribution.** A death becomes your kill only if the game marked a
   hitsplat on that monster as yours *and* it was the monster you were fighting.
   A despawn is not a death. Every event is buffered and resolved at the game
-  tick boundary, so no ordering within a tick is load-bearing.
+  tick boundary, so almost no ordering within a tick is load-bearing — the one
+  exception is which of two simultaneous hitsplats opens a window when none was
+  open, described in `KillAttribution`'s class doc.
 - **Consumption measurement.** Inventory, worn equipment and Dizana's quiver
   are summed into one multiset of stackable items and differenced once per
   tick, so equipping a stack — a loss in one container and a gain in another —
@@ -73,11 +75,32 @@ Written down rather than rounded off.
   *gross* consumption, which errs toward carrying too much, and the recovered
   volume sits beside it as a disclosed contaminant. Erring the other way ends a
   trip early, which is the failure the plugin exists to prevent.
-- **Area attacks under-count kills.** When a spell damages four monsters and
-  three of them die, one window of consumption cannot be split four ways
-  without inventing the split. Those deaths are counted separately as
-  "unattributed" — the cost-per-kill figure stays sound and the kill count is
-  understated, visibly.
+- **The looting bag is an untracked, and previously undocumented, contaminant.**
+  `InventoryID.LOOTING_BAG` is correctly left out of the summed containers —
+  it is not the player carrying the ammunition, it is storage — but that also
+  means moving a stack from the inventory into the bag is a real decrement of
+  the tracked sum, and if it happens while a window is open it books as
+  consumption on whatever you are currently fighting. Bagging loot mid-fight
+  is normal Wilderness Slayer practice, and when the monster you are on drops
+  the ammunition you use, the pickup off its corpse books as a gain and
+  bagging that same stack a moment later books as consumption of the same id
+  — both charged to that monster's record, neither one a shot fired. This is a
+  larger source of contamination than several of the limitations already
+  listed here.
+- **Area attacks under-count kills, and overstate the cost of the one they do
+  count.** When a spell damages four monsters and three of them die, one
+  window of consumption cannot be split four ways without inventing the
+  split, so those three deaths are counted separately as "unattributed" and
+  the whole window's ammunition is charged to the fourth. The reported figure
+  is therefore cost per *attributed* kill, not cost per monster killed — four
+  barrages of four runes each, each one killing three monsters, is 16 runes
+  over 12 kills, a true cost of 1.333 per monster, but `consumedPerKill`
+  reports 4.0, three times that. The underlying data stays honest throughout:
+  `consumed / (kills + unattributedDeaths)` recovers 1.333 exactly, so it is
+  only the headline figure that needs a later milestone to divide by the right
+  denominator. Until then this errs toward carrying too much, which is the
+  safe direction — a shortfall ends a Wilderness trip early, and a surplus is
+  merely spare capacity.
 - **A kill stolen by another player still counts.** If you damaged it and it
   was your target, it is recorded, whether or not you got the loot or the
   Slayer count. Multi-combat Wilderness makes this unavoidable without reading

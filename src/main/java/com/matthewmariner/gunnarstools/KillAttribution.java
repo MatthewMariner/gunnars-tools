@@ -79,9 +79,22 @@ import javax.annotation.Nullable;
  * on this class decide anything: they append to buffers, and
  * {@link #tickEnded(AmmoDelta)} resolves the whole tick in one fixed order —
  * the player's own death first, then this tick's consumption, then deaths, then
- * despawns, then interaction changes. No ordering within a tick is
+ * despawns, then interaction changes. Almost no ordering within a tick is
  * load-bearing, which removes an entire class of intermittent, unreproducible
- * miscount.
+ * miscount — with one exception, below.
+ *
+ * <p><b>The exception:</b> {@link #damagedByMe(FoughtNpc)} decides at event
+ * time, not at the tick boundary, which monster's hitsplat opens a window
+ * when none is open — whichever one the method sees first. If two of the
+ * player's own hitsplats land on different monsters this tick and no window
+ * is open yet, arrival order within the tick picks the winner, and that
+ * choice is not revisited when the tick resolves. This is reachable when a
+ * multi-target attack is the first action after a kill (the window closed
+ * with the previous kill), or when the plugin is enabled while a
+ * multi-target fight is already under way. On a Slayer task the two monsters
+ * usually share an id, so the record is identical whichever one wins; only a
+ * cross-id area attack under those conditions puts the cost on the wrong
+ * record.
  *
  * <p>Two consequences of that order are deliberate. Consumption is added
  * <em>before</em> deaths resolve, so the shot that killed the monster is

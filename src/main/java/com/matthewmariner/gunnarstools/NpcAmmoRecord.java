@@ -29,9 +29,13 @@ import java.util.Map;
  *       that did not end in an observed kill, with {@link #getAbandonedFights()}
  *       counting them. Kept out of the average entirely.</li>
  *   <li>{@link #getUnattributedDeaths()} counts kills that were real but could
- *       not be priced — the other targets of an area attack. A record with many
- *       of these has a sound cost-per-kill figure and an understated kill
- *       count.</li>
+ *       not be priced — the other targets of an area attack. {@link
+ *       #consumedPerKill(int)} is cost per <em>attributed</em> kill, not per
+ *       monster killed, and a record with many of these understates both:
+ *       the whole window's ammunition is charged to whichever one death got
+ *       priced, so the true per-monster cost is {@code consumed / (kills +
+ *       unattributedDeaths)}, lower than what {@link #consumedPerKill(int)}
+ *       alone reports.</li>
  * </ul>
  *
  * <p>Gains are only recorded for item ids that appear in the consumed column,
