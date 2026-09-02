@@ -1,0 +1,12 @@
+.gradle
+build
+.idea/
+.project
+.settings/
+.classpath
+nbactions.xml
+nb-configuration.xml
+nbproject/
+# Scratch client logs. A 6000-line RuneLite debug dump is not source.
+TEMP-output.txt
+*-output.txt
