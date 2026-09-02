@@ -237,6 +237,27 @@ public class KillAttributionTest
 	}
 
 	@Test
+	public void aFightThatSpentNothingDespawnsWithoutBankingAZeroCostAbandonment()
+	{
+		// Melee carries no ammunition. A fight the player genuinely had —
+		// engaged and damaged — that despawns having spent nothing must not
+		// add a zero-cost row to the column that exists to flag "died without
+		// a zero-health update"; an empty window is not evidence of anything.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc target = spider(40);
+
+		attribution.interacting(target);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(target);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+
+		attribution.npcDespawned(40);
+		List<Attribution> out = attribution.tickEnded(AmmoDelta.EMPTY);
+
+		assertTrue("a window with nothing spent in it is not an abandonment: " + out, out.isEmpty());
+	}
+
+	@Test
 	public void deathThenDespawnInOneTickIsOneKillAndNoAbandonment()
 	{
 		// The ordinary shape of a kill: the health bar hits zero and the corpse
@@ -534,6 +555,36 @@ public class KillAttributionTest
 			4L, tally.gainedOf(ARROW));
 	}
 
+	@Test
+	public void gainsDoNotLeakFromOneWindowIntoTheNext()
+	{
+		// The window object backing the open fight is reused, kill after kill —
+		// closing one clears it rather than replacing it. If clearing it forgot
+		// the gained side, a pickup from one fight would keep showing up as a
+		// recovery on every fight that follows, corrupting the one column that
+		// exists to disclose contamination.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc first = spider(40);
+		FoughtNpc second = spider(41);
+
+		attribution.interacting(first);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(first);
+		attribution.tickEnded(found(ARROW, 40));
+		attribution.npcDied(first);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+
+		attribution.interacting(second);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(second);
+		attribution.npcDied(second);
+		// Nothing at all is gained on the second kill.
+		List<Attribution> out = attribution.tickEnded(AmmoDelta.EMPTY);
+
+		assertEquals("the first kill's pickup must not still be sitting in the second kill's tally",
+			0L, out.get(0).getTally().gainedOf(ARROW));
+	}
+
 	// --- the player's own death ----------------------------------------------
 
 	@Test
@@ -576,6 +627,38 @@ public class KillAttributionTest
 	}
 
 	@Test
+	public void measurementResumesAfterTheDeathTickRatherThanStayingVoidedForTheSession()
+	{
+		// Two other tests cover the death itself, but neither one ever asks
+		// this class to measure anything again afterwards — and an empty
+		// result is what both a healthy recovery and a permanently wedged
+		// "everything is voided" flag look like from the outside. A plugin
+		// whose whole subject is dying to PKers cannot afford a death to be
+		// the last thing it ever prices.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc target = spider(40);
+
+		attribution.interacting(target);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(target);
+		attribution.localPlayerDied();
+		attribution.tickEnded(spent(ARROW, 946));
+
+		// A fresh fight, well after the death tick.
+		FoughtNpc next = spider(41);
+		attribution.interacting(next);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(next);
+		attribution.npcDied(next);
+		List<Attribution> out = attribution.tickEnded(spent(ARROW, 3));
+
+		assertEquals("a kill well after the death must still be priced, not swallowed",
+			1, out.size());
+		assertEquals(Attribution.Kind.KILL, out.get(0).getKind());
+		assertEquals(3L, out.get(0).getTally().consumedOf(ARROW));
+	}
+
+	@Test
 	public void aDeathBufferedOnTheTickThePlayerDiesIsDiscardedWithEverythingElse()
 	{
 		KillAttribution attribution = new KillAttribution();
@@ -603,14 +686,70 @@ public class KillAttributionTest
 		attribution.tickEnded(AmmoDelta.EMPTY);
 		attribution.damagedByMe(target);
 		attribution.tickEnded(spent(ARROW, 5));
-		attribution.npcDied(spider(41));
+		// Buffered before it is ever resolved: the death is for the index that
+		// was both damaged and the window's owner, exactly what a genuine kill
+		// looks like — a death for some unrelated index would yield nothing
+		// whether or not the buffer survives the reset, which proves nothing.
+		attribution.npcDied(target);
 
 		attribution.reset();
 
 		assertNull(attribution.getOwner());
 		assertTrue(attribution.getWindow().isEmpty());
 		assertEquals(0, attribution.getDamageEvidenceCount());
+
+		// Index 40 gets recycled for an unrelated monster on the next tick. If
+		// the death buffered above had survived the reset, this hitsplat would
+		// put 40 back into the damage-evidence set, and the leftover death
+		// would then read as "damaged, so it must be an unattributed death" —
+		// a phantom verdict for an NPC that is long gone, which also consumes
+		// the newcomer's only piece of evidence before its own death is ever
+		// judged.
+		FoughtNpc newcomer = skeleton(40);
+		attribution.damagedByMe(newcomer);
 		assertTrue("a buffered death must not survive the reset either",
 			attribution.tickEnded(AmmoDelta.EMPTY).isEmpty());
+	}
+
+	@Test
+	public void aWorldHopForgetsAStaleDespawnRatherThanReplayingItOnTheNewWorld()
+	{
+		// A despawn buffered on the old world, never resolved before the hop
+		// (game state changes replace the scene without waiting for a tick to
+		// close). If reset() left it sitting in the buffer, index 40's fresh
+		// occupant on the new world would have its own opening engagement
+		// swallowed by a despawn that belongs to nothing anymore.
+		KillAttribution attribution = new KillAttribution();
+
+		attribution.npcDespawned(40);
+		attribution.reset();
+
+		FoughtNpc newcomer = skeleton(40);
+		attribution.damagedByMe(newcomer);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+
+		assertSame("a leftover despawn from the old world must not swallow the new one's engagement",
+			newcomer, attribution.getOwner());
+	}
+
+	@Test
+	public void aWorldHopForgetsAnEngagementThatWasNeverResolvedIntoAnOwner()
+	{
+		// The player clicked a monster, but the hop lands before the tick that
+		// would have turned that click into the window's owner. If reset()
+		// left the click sitting in pendingEngagement, the very next tick on
+		// the new world — even one with no click and no hitsplat of its own —
+		// would hand the window to a monster that is not even in this world's
+		// scene anymore.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc preHopTarget = spider(40);
+
+		attribution.interacting(preHopTarget);
+		attribution.reset();
+
+		attribution.tickEnded(AmmoDelta.EMPTY);
+
+		assertNull("a click from before the hop must not become this world's owner",
+			attribution.getOwner());
 	}
 }

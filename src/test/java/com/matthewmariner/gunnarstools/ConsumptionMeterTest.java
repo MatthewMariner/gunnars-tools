@@ -325,6 +325,59 @@ public class ConsumptionMeterTest
 	}
 
 	@Test
+	public void invalidatingMidTickClearsTheDirtyFlagFromEarlierInTheSameTick()
+	{
+		// A container event lands (dirty = true), and then, before tickEnded()
+		// ever runs, something replaces the whole scene and invalidates the
+		// baseline — a world hop mid-tick. If invalidateBaseline() left the
+		// stale dirty flag set, the next tick — the loading screen itself,
+		// where no container event arrives at all — would sail past the
+		// "nothing changed" guard and baseline the cleared, empty snapshots as
+		// though an empty inventory had genuinely been observed.
+		ConsumptionMeter meter = meter();
+		meter.containerChanged(InventoryID.INV, items(ARROW, 950));
+		meter.tickEnded();
+
+		meter.containerChanged(InventoryID.INV, items(ARROW, 900));
+		meter.invalidateBaseline();
+
+		assertTrue("a tick with no events afterwards must not baseline anything",
+			meter.tickEnded().isEmpty());
+		assertFalse("nothing was seen this tick, so nothing should be known yet",
+			meter.hasBaseline());
+
+		// The kit reappears once the loading screen ends.
+		meter.containerChanged(InventoryID.INV, items(ARROW, 950));
+		AmmoDelta delta = meter.tickEnded();
+
+		assertTrue("the real inventory arriving must not read as 950 arrows found: " + delta,
+			delta.isEmpty());
+	}
+
+	@Test
+	public void anIdThatVanishedEntirelyCanStillBeReportedAsAGainLater()
+	{
+		// The stack empties first, which drops the id out of the baseline
+		// entirely rather than leaving it recorded at zero. Picking some back
+		// up off the floor afterwards has to be judged against the union of
+		// both sides' id spaces — walking only the (now id-less) baseline
+		// would silently lose the pickup.
+		ConsumptionMeter meter = meter();
+		meter.containerChanged(InventoryID.INV, items(ARROW, 2));
+		meter.tickEnded();
+
+		meter.containerChanged(InventoryID.INV, items());
+		AmmoDelta fired = meter.tickEnded();
+		assertEquals(Long.valueOf(2L), fired.getConsumed().get(ARROW));
+
+		meter.containerChanged(InventoryID.INV, items(ARROW, 2));
+		AmmoDelta pickedBackUp = meter.tickEnded();
+
+		assertEquals("arrows off the floor after the stack ran dry must still count as a gain",
+			Long.valueOf(2L), pickedBackUp.getGained().get(ARROW));
+	}
+
+	@Test
 	public void aFreshMeterIsNotBaselinedByTicksAlone()
 	{
 		ConsumptionMeter meter = meter();
