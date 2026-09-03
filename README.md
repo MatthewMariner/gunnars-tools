@@ -130,15 +130,23 @@ multiplies the per-monster one, because "how many will I kill" is a question
 about monsters. With no area damage the two are the same number, exactly, which
 is every ranged and melee trip there is.
 
-**The co-victim count is not `unattributedDeaths`,** which is what this file
-previously suggested would recover the figure. That formula leaks in two ways
-this one does not. An unattributed death is filed against the *dead* monster's
-id, so a cross-species barrage would apply the correction to a record holding
-none of the ammunition. And a monster you damaged, walked away from, and which
-died later to somebody else is an unattributed death whose ammunition went into
-the *abandoned* column — counting it raises the denominator without raising the
-numerator, and the per-monster figure comes out low. Low is the direction that
-ends a trip early. Both are covered by tests.
+**A co-victim has to be the same monster.** The count is a divisor, and the
+number divided into it is a trip of one named monster — a hundred Spindels, not
+a hundred deaths. A barrage that kills the Spindel you are fighting and two
+skeletons standing in it therefore has *no* co-victims: those four runes bought
+one Spindel, and a hundred Spindels will need a hundred more casts. Counting the
+skeletons made the same four barrages read as 16 runes over 12 monsters and told
+you to pack 134 for a trip of 100 that actually costs 400. The skeletons are
+still counted, as unattributed deaths against their own id, where they are true.
+
+**The co-victim count is also not `unattributedDeaths`,** which is what this file
+originally suggested would recover the figure. That column holds deaths from
+outside any priced window as well: a monster you damaged, walked away from, and
+which died later to somebody else is an unattributed death whose ammunition went
+into the *abandoned* column, so counting it raises the denominator without
+raising the numerator. Both mistakes point the same way — the per-monster figure
+comes out low, and low is the direction that ends a trip early. Both are covered
+by tests, and by the mutation that puts each of them back.
 
 ### Bank highlighting: the supported mechanism
 
@@ -206,19 +214,23 @@ Written down rather than rounded off.
   inventing the split, so those deaths are counted separately as
   "unattributed" and the whole window's ammunition is charged to the fourth.
   `consumedPerKill` is therefore cost per *attributed* kill — four barrages of
-  four runes, each killing three monsters, is 16 runes over 12 monsters, a true
+  four runes, each killing three monsters **of the one id the trip is for**
+  (a different species in the blast is not a divisor; see above), is 16 runes
+  over 12 monsters, a true
   1.333 each, and `consumedPerKill` reports 4.0. `consumedPerMonster` and every
   figure the trip projection multiplies now divide by the co-victim-corrected
   count and report 1.333. Both are published and both are labelled; the panel
   shows the second and names the first when they differ.
-- **A monster you damaged and never abandoned, which somebody else finishes
-  while you are mid-fight elsewhere, is counted as a co-victim.** It is
-  indistinguishable from one caught by your splash damage — both are a death of
-  something you damaged, during a window that is open. Each one dilutes the
-  per-monster figure by one monster. That is a much narrower leak than counting
-  every unattributed death (a fight you *did* abandon is excluded, because its
-  ammunition went to the abandoned column), but it is a leak, and it errs
-  toward carrying too little.
+- **A monster of the same id you damaged and never abandoned, which somebody
+  else finishes while you are mid-fight elsewhere, is counted as a co-victim.**
+  It is indistinguishable from one caught by your splash damage — both are a
+  death of something you damaged, sharing your target's id, during a window that
+  is open. Each one dilutes the per-monster figure by one monster. That is a much
+  narrower leak than counting every unattributed death (a different species is
+  excluded by id, and a fight you *did* abandon is excluded because its
+  ammunition went to the abandoned column), but it is a leak, and on a Slayer
+  task — where everything in the spawn shares one id — it is the shape most
+  likely to occur. It errs toward carrying too little.
 - **A kill stolen by another player still counts.** If you damaged it and it
   was your target, it is recorded, whether or not you got the loot or the
   Slayer count. Multi-combat Wilderness makes this unavoidable without reading

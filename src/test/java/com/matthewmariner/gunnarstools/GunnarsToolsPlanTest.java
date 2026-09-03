@@ -25,6 +25,7 @@ public class GunnarsToolsPlanTest
 	private static final int ARROW = 11;
 	private static final int SPINDEL = 5265;
 	private static final int CALLISTO = 6609;
+	private static final int SKELETON = 6612;
 
 	private final FakeConfig config = new FakeConfig();
 
@@ -197,6 +198,49 @@ public class GunnarsToolsPlanTest
 		assertEquals(3, plugin.getPlanSubject().getMonstersPriced());
 		assertEquals("four arrows a monster over a hundred and twenty of them",
 			Long.valueOf(480L), plugin.getWithdrawals().get(ARROW));
+	}
+
+	@Test
+	public void aBarrageThatAlsoKillsSomethingElsePlansForTheMonsterTheTripIsFor()
+	{
+		// The arithmetic done by hand before any of it was written down. Four
+		// barrages of four runes; each one kills the Spindel being fought and two
+		// skeletons standing in it. Sixteen runes bought four Spindels, so a
+		// Spindel costs four runes and a hundred of them costs four hundred.
+		//
+		// Counting the skeletons as co-victims makes the divisor twelve, the rate
+		// 1.333 and the answer 134 — a third of the trip, in the one direction this
+		// plugin exists to refuse. The divisor has to be in the same unit as the
+		// number it is eventually divided into, and that unit is Spindels.
+		GunnarsToolsPlugin plugin = plugin();
+		config.withTripKills(100).withSafetyMargin(0);
+
+		for (int cast = 0; cast < 4; cast++)
+		{
+			final int index = 40 + cast * 3;
+			FoughtNpc target = npc(index, SPINDEL, "Spindel");
+			plugin.getAttribution().interacting(target);
+			plugin.tickEnded(AmmoDelta.EMPTY);
+
+			plugin.getAttribution().damagedByMe(target);
+			plugin.getAttribution().damagedByMe(npc(index + 1, SKELETON, "Skeleton"));
+			plugin.getAttribution().damagedByMe(npc(index + 2, SKELETON, "Skeleton"));
+			plugin.getAttribution().npcDied(target);
+			plugin.getAttribution().npcDied(npc(index + 1, SKELETON, "Skeleton"));
+			plugin.getAttribution().npcDied(npc(index + 2, SKELETON, "Skeleton"));
+
+			assertTrue(plugin.tickEnded(spent(ARROW, 4)));
+		}
+
+		NpcAmmoRecord subject = plugin.getPlanSubject();
+		assertEquals(SPINDEL, subject.getNpcId());
+		assertEquals(4, subject.getKills());
+		assertEquals("eight skeletons died, and not one of them was a Spindel",
+			0, subject.getPricedCoVictims());
+		assertEquals(4, subject.getMonstersPriced());
+		assertEquals("the skeletons' own record counts them, and prices nothing",
+			8, plugin.getLedger().get(SKELETON).getUnattributedDeaths());
+		assertEquals(Long.valueOf(400L), plugin.getWithdrawals().get(ARROW));
 	}
 
 	@Test

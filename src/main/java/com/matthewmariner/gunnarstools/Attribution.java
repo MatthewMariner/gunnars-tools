@@ -68,17 +68,19 @@ public final class Attribution
 	}
 
 	/**
-	 * @param coVictims how many <em>other</em> monsters died inside the window
-	 *                  this kill closes. Attached to the kill rather than reported
-	 *                  against the co-victims' own records, because the
-	 *                  ammunition is on this record and the correction has to
-	 *                  land where the numerator is — a barrage that catches a
-	 *                  different species would otherwise file the divisor against
-	 *                  a monster that never held a rune. See
+	 * @param coVictims how many <em>other monsters of this same id</em> died
+	 *                  inside the window this kill closes. The id is half the
+	 *                  definition: the count is a divisor under this record's
+	 *                  ammunition and the number it is divided into is a trip of
+	 *                  this monster, so a different species caught by the same
+	 *                  barrage is a real death that belongs in a different unit.
+	 *                  Attached to the kill rather than to the co-victims'
+	 *                  own verdicts because the ammunition is on this record and
+	 *                  the correction has to land where the numerator is. See
 	 *                  {@link Kind#UNATTRIBUTED_DEATH}, which is what those
-	 *                  co-victims are also reported as, and
-	 *                  {@link ConsumptionEstimate} for what the two counts are
-	 *                  each good for.
+	 *                  co-victims are also reported as, {@link KillAttribution}
+	 *                  for how they are counted, and {@link ConsumptionEstimate}
+	 *                  for what the two counts are each good for.
 	 */
 	static Attribution kill(FoughtNpc npc, AmmoTally tally, int coVictims)
 	{

@@ -93,7 +93,11 @@ public final class NpcAmmoRecord
 
 	private int unattributedDeaths;
 
-	/** Monsters killed by the windows this record priced, other than the kills. */
+	/**
+	 * Monsters of <em>this same id</em> killed by the windows this record priced,
+	 * other than the kills themselves. Anything else a barrage killed is somebody
+	 * else's record and somebody else's unit; see {@link KillAttribution}.
+	 */
 	private int pricedCoVictims;
 
 	NpcAmmoRecord(FoughtNpc npc)
@@ -232,8 +236,9 @@ public final class NpcAmmoRecord
 	}
 
 	/**
-	 * @return other monsters killed by the windows this record priced. Zero for
-	 * every single-target trip there is.
+	 * @return other monsters of this id killed by the windows this record priced.
+	 * Zero for every single-target trip there is, and zero for area damage that
+	 * only ever caught something else.
 	 */
 	public int getPricedCoVictims()
 	{
@@ -241,9 +246,10 @@ public final class NpcAmmoRecord
 	}
 
 	/**
-	 * @return how many monsters the priced windows actually killed — the kills
-	 * plus their co-victims. This, not {@link #getKills()}, is the denominator a
-	 * projection wants; see {@link ConsumptionEstimate}.
+	 * @return how many of <em>this</em> monster the priced windows killed — the
+	 * kills plus their same-id co-victims. This, not {@link #getKills()}, is the
+	 * denominator a projection wants, because it is counted in the same unit as
+	 * the trip size that gets divided into it; see {@link ConsumptionEstimate}.
 	 */
 	public int getMonstersPriced()
 	{

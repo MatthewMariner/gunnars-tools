@@ -78,27 +78,46 @@ import javax.annotation.Nullable;
  * differ by about the number of monsters caught in each cast. A projection that
  * multiplies the first by a task's size overstates by the same factor.
  *
- * <p>So the window carries a second number: how many other monsters died while
- * it was open. When the window closes as a kill, that count rides along on the
- * {@link Attribution}, and {@code consumed / (1 + coVictims)} is a per-monster
- * cost derived from measurements with nothing assumed — no split invented, just
- * a different denominator over the same window.
+ * <p>So the window carries a second number: how many other monsters <em>of the
+ * owner's own id</em> died while it was open. When the window closes as a kill,
+ * that count rides along on the {@link Attribution}, and
+ * {@code consumed / (1 + coVictims)} is a per-monster cost derived from
+ * measurements with nothing assumed — no split invented, just a different
+ * denominator over the same window.
  *
- * <p>Three details make it a correction rather than a second error.
+ * <p>Four details make it a correction rather than a second error.
  *
  * <ul>
- *   <li><b>It rides on the kill, not on the co-victim.</b> An
- *       {@link Attribution.Kind#UNATTRIBUTED_DEATH} is filed against the dead
- *       monster's own id, so on a cross-species barrage the divisor would land
- *       on a record holding none of the ammunition. The count is attached to the
- *       window instead, which is where the numerator is.</li>
+ *   <li><b>Only the same monster counts.</b> This number is a divisor, and a
+ *       divisor is only meaningful in the unit its numerator is in. The
+ *       numerator is one monster's ammunition, and the figure it eventually
+ *       feeds is {@link TripPlan} — whose target is "how many Spindels am I
+ *       going out to kill", not "how many things will die near me". So a barrage
+ *       that kills the spider being fought and two skeletons standing in it has
+ *       <em>no</em> co-victims: those runes bought one spider, and a hundred
+ *       spiders will need a hundred more casts. Counting the skeletons divided
+ *       one monster's cost by three monsters' worth of deaths and reported a
+ *       spider at a third of its price — an understatement, and understating is
+ *       the failure this plugin exists to prevent. The skeletons are still
+ *       counted, against their own id, as
+ *       {@link Attribution.Kind#UNATTRIBUTED_DEATH}.</li>
+ *   <li><b>It is counted on the window, not read off the record afterwards.</b>
+ *       Once only same-id deaths count, {@code kills + unattributedDeaths} looks
+ *       like it would give the same answer, and it does not: that column also
+ *       holds deaths from outside any priced window — one the player abandoned,
+ *       whose ammunition went to the abandoned column, and one that died with no
+ *       window open at all. Both would raise the divisor without raising the
+ *       dividend. Only a death inside a window that got priced is a divisor of
+ *       that window's ammunition, and the window is the only place that is
+ *       known.</li>
  *   <li><b>A monster the player walked away from does not count.</b> Switching
  *       targets banks that fight's ammunition as
  *       {@link Attribution.Kind#ABANDONED} — out of the numerator entirely — and
- *       if it later dies to somebody else it is still an unattributed death. Let
- *       that raise the denominator and the per-monster figure comes out
- *       <em>low</em>, which is the direction that ends a trip early. Those
- *       indices are remembered and excluded.</li>
+ *       if it later dies to somebody else it is still an unattributed death. On
+ *       a Slayer task it shares the target's id, so the check above does not
+ *       exclude it and nothing else would. Let it raise the denominator and the
+ *       per-monster figure comes out <em>low</em>, which is the direction that
+ *       ends a trip early. Those indices are remembered and excluded.</li>
  *   <li><b>The tick is classified before it is applied.</b> A barrage's kill and
  *       its co-victims arrive in one tick in no guaranteed order, so counting as
  *       the loop goes would either credit the co-victims to the window that was
@@ -107,11 +126,11 @@ import javax.annotation.Nullable;
  *       built once the whole tick's count is known.</li>
  * </ul>
  *
- * <p>What it cannot rule out: a monster the player damaged, never abandoned, and
- * which somebody else finishes off while the player is mid-fight elsewhere is
- * indistinguishable from a splash-damage co-victim, and dilutes the per-monster
- * figure by one. That is a far narrower leak than counting every unattributed
- * death, and it is disclosed rather than closed.
+ * <p>What it cannot rule out: a monster the player damaged, never abandoned,
+ * sharing the target's id, and which somebody else finishes off while the player
+ * is mid-fight elsewhere is indistinguishable from a splash-damage co-victim,
+ * and dilutes the per-monster figure by one. That is a far narrower leak than
+ * counting every unattributed death, and it is disclosed rather than closed.
  *
  * <h2>Everything is decided at the tick boundary</h2>
  *
@@ -320,7 +339,19 @@ public final class KillAttribution
 			else if (iDamagedIt)
 			{
 				deathVerdicts.add(Attribution.unattributedDeath(dead));
-				if (windowOwner != null && !iWalkedAwayFromIt)
+
+				// The id comparison is the unit check, and it is the whole
+				// difference between a correction and a third error. This count
+				// ends up as the divisor under one monster's ammunition, and the
+				// number it is eventually divided into is a trip of that same
+				// monster. A skeleton killed by a barrage aimed at a spider is a
+				// real death — it is being filed as one on the line above — but it
+				// is not a spider, and letting it raise the spider's divisor
+				// reports a spider at a fraction of its price. See the class
+				// javadoc on co-victims for the unit, and NpcAmmoRecord for where
+				// this lands.
+				if (windowOwner != null && !iWalkedAwayFromIt
+					&& dead.getId() == windowOwner.getId())
 				{
 					coVictimsThisTick++;
 				}

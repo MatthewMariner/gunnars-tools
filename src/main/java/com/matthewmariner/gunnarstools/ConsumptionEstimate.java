@@ -26,16 +26,22 @@ package com.matthewmariner.gunnarstools;
  * <h2>What the co-victim count is, and what it is not</h2>
  *
  * <p>{@link #getMonstersPriced()} is the kill count plus the deaths
- * {@link KillAttribution} saw inside the windows it priced. It is deliberately
- * <em>not</em> {@code kills + unattributedDeaths}, which is what the README's
- * limitation section suggested and which leaks in two ways this one does not.
- * An unattributed death is filed against the dead monster's own id, so under a
- * cross-id area attack the correction would be applied to a record that never
- * held the ammunition; and a monster the player damaged, walked away from and
- * that died later to somebody else is an unattributed death whose consumption
- * went into the abandoned column, so counting it would inflate the denominator
- * without inflating the numerator — an <em>understatement</em>, which is the
- * direction that ends a trip early. See {@link KillAttribution} for how the
+ * {@link KillAttribution} saw <em>of this same monster</em> inside the windows
+ * it priced. Both halves of that are load-bearing.
+ *
+ * <p>The id half is the unit. This denominator sits under one monster's
+ * ammunition and {@link TripPlan} divides a trip of that same monster into it,
+ * so a skeleton killed by a barrage aimed at a spider must not appear in it —
+ * the runes bought one spider, and counting the skeleton reports a spider at a
+ * fraction of its price.
+ *
+ * <p>The window half is why it is not {@code kills + unattributedDeaths}, which
+ * is what the README's limitation section once suggested. That column also holds
+ * deaths from outside any priced window: a monster the player damaged, walked
+ * away from and somebody else finished has its consumption in the abandoned
+ * column, so counting its death raises the denominator without raising the
+ * numerator. Both errors point the same way — <em>understatement</em>, which is
+ * the direction that ends a trip early. See {@link KillAttribution} for how the
  * co-victims are counted instead.
  *
  * <h2>Spread</h2>

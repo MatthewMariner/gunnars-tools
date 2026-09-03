@@ -763,11 +763,16 @@ public class KillAttributionTest
 	}
 
 	@Test
-	public void theCountRidesOnTheKillEvenWhenTheCoVictimsAreADifferentSpecies()
+	public void aDifferentSpeciesCaughtInTheSameBarrageIsNotACoVictim()
 	{
-		// The unattributed deaths are filed against the skeletons' own id. If the
-		// correction were applied there it would land on a record holding none of
-		// the ammunition, and the spider's figure would stay uncorrected.
+		// The count is a divisor, and a divisor is only meaningful in the unit its
+		// numerator is in. The numerator is one spider's ammunition and the number
+		// it is eventually divided into is a trip of spiders, so the only deaths
+		// that may raise it are spiders. A skeleton the same cast killed is a real
+		// death, and it is filed as one against the skeletons' own id — but the six
+		// runes here bought one spider, not two monsters' worth of spider, and
+		// dividing by two reports a spider at half price. Half price is the
+		// direction that ends a trip early.
 		KillAttribution attribution = new KillAttribution();
 		FoughtNpc target = spider(40);
 
@@ -782,22 +787,60 @@ public class KillAttributionTest
 		List<Attribution> out = attribution.tickEnded(spent(ARROW, 6));
 
 		assertEquals(SPIDER_ID, out.get(0).getNpc().getId());
-		assertEquals(1, out.get(0).getCoVictims());
+		assertEquals("six runes over one spider, whatever else the cast hit",
+			0, out.get(0).getCoVictims());
 		assertEquals(SKELETON_ID, out.get(1).getNpc().getId());
 		assertEquals("and the co-victim's own verdict carries no correction",
 			0, out.get(1).getCoVictims());
 	}
 
 	@Test
+	public void aMixedBarrageCountsTheDeathsThatShareTheTargetsIdAndNoOthers()
+	{
+		// One cast, four dead: the spider being fought, a second spider, and two
+		// skeletons that happened to be standing in it. Two spiders died for these
+		// eight runes, so a spider cost four — and the skeletons change nothing,
+		// because a trip planned off this record is a trip for spiders.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc target = spider(40);
+
+		attribution.interacting(target);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+
+		attribution.damagedByMe(target);
+		attribution.damagedByMe(spider(41));
+		attribution.damagedByMe(skeleton(42));
+		attribution.damagedByMe(skeleton(43));
+		attribution.npcDied(target);
+		attribution.npcDied(spider(41));
+		attribution.npcDied(skeleton(42));
+		attribution.npcDied(skeleton(43));
+
+		List<Attribution> out = attribution.tickEnded(spent(ARROW, 8));
+
+		assertEquals(4, out.size());
+		assertEquals(Attribution.Kind.KILL, out.get(0).getKind());
+		assertEquals("the second spider counts and the two skeletons do not",
+			1, out.get(0).getCoVictims());
+		assertEquals(8L, out.get(0).getTally().consumedOf(ARROW));
+	}
+
+	@Test
 	public void aMonsterThePlayerWalkedAwayFromIsNotACoVictimOfTheNextFight()
 	{
-		// The leak the whole exclusion exists for. The spider's fight was banked as
-		// abandoned — its ammunition is out of the numerator entirely — so letting
-		// its later death raise the skeleton's denominator would understate what
-		// the skeleton costs, and understating ends a trip early.
+		// The leak the whole exclusion exists for. The first spider's fight was
+		// banked as abandoned — its ammunition is out of the numerator entirely —
+		// so letting its later death raise the second spider's denominator would
+		// understate what a spider costs, and understating ends a trip early.
+		//
+		// Both are spiders on purpose. A co-victim of a different id is refused by
+		// the id check anyway, so a cross-species version of this case would stay
+		// green with the walked-away book deleted entirely; and the shape this
+		// guard actually exists for is a slayer task, where every monster in the
+		// spawn shares one id.
 		KillAttribution attribution = new KillAttribution();
 		FoughtNpc walkedAwayFrom = spider(40);
-		FoughtNpc newTarget = skeleton(41);
+		FoughtNpc newTarget = spider(41);
 
 		attribution.interacting(walkedAwayFrom);
 		attribution.tickEnded(AmmoDelta.EMPTY);
@@ -889,7 +932,10 @@ public class KillAttributionTest
 		// ends a trip early.
 		KillAttribution attribution = new KillAttribution();
 		FoughtNpc first = spider(40);
-		FoughtNpc second = skeleton(41);
+		// A spider rather than a skeleton, so that the count surviving the switch
+		// would genuinely land on the second fight rather than being refused by the
+		// id check for an unrelated reason.
+		FoughtNpc second = spider(41);
 
 		attribution.interacting(first);
 		attribution.tickEnded(AmmoDelta.EMPTY);
@@ -909,7 +955,7 @@ public class KillAttributionTest
 		List<Attribution> out = attribution.tickEnded(spent(ARROW, 6));
 
 		assertEquals(Attribution.Kind.KILL, out.get(0).getKind());
-		assertEquals("the skeleton killed nothing but itself", 0, out.get(0).getCoVictims());
+		assertEquals("the second spider killed nothing but itself", 0, out.get(0).getCoVictims());
 	}
 
 	@Test
