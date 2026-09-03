@@ -10,14 +10,31 @@ package com.matthewmariner.gunnarstools;
  * field before {@link ConsumptionMeter} starts differencing quantities.
  *
  * <p><b>The rule is a property, not a list.</b> There is deliberately no table
- * of arrow, bolt and rune ids here. The premise the whole plugin rests on is
- * that <em>an ammunition stack never occupies a keep slot on death</em> — which
- * is a statement about stackability. Arrows, bolts, darts, every rune and
- * revenant ether are stackable; a rune platebody, a shark and a dragon
- * defender are not. So "stackable" is not an approximation of the category we
- * care about, it <em>is</em> the category, expressed the way the game itself
- * expresses it. A table would need an entry per ammunition type in the game and
- * would be wrong the week Jagex adds one.
+ * of arrow, bolt and rune ids here. Arrows, bolts, darts, every rune and
+ * revenant ether are stackable; a rune platebody, a shark and a dragon defender
+ * are not. Stackability therefore separates the things this plugin meters from
+ * almost everything it does not, in a way the game itself already expresses, and
+ * a table would need an entry per ammunition type in the game and would be wrong
+ * the week Jagex adds one.
+ *
+ * <p><b>It is an over-approximation, not the category itself,</b> and an earlier
+ * version of this javadoc claimed otherwise. {@link #isConsumable} admits every
+ * stackable unnoted item, which is more than ammunition: this repository says so
+ * two files away, where {@code AmmoDelta} notes that "coins are stackable and
+ * therefore metered." The false positives are accepted and disclosed rather than
+ * denied — narrowing them means the id table this method exists to avoid.
+ *
+ * <p><b>What it is <em>not</em> justified by.</b> This used to open by calling
+ * "an ammunition stack never occupies a keep slot on death" the premise the whole
+ * plugin rests on. That is an unverified claim about the game and it is not what
+ * the wiki says: Items Kept on Death ranks candidates in order of value, first by
+ * effective Grand Exchange value and then by alchemy value, with no mention of
+ * stacks, quantity or unit price and no ammunition row. The sibling
+ * {@code ../dangerous-teleport} declines to subtract keep slots on the same
+ * unverified ranking — see its {@code RiskAssessment} javadoc — and this file
+ * should not have been leaning on the mirror image of it. Nothing in the code
+ * changes: stackability is a good filter for "did a quantity move for a reason
+ * worth counting" whatever death does with the stack afterwards.
  *
  * <p>Noted items are excluded on top of that. A note is stackable — that is the
  * entire point of a note — but nobody fires one, and a bank trip that withdraws

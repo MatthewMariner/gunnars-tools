@@ -7,10 +7,29 @@ of N, bring X".** Nothing here is submitted to, or available on, the Plugin Hub.
 ## Why
 
 Wilderness Slayer trips are a carrying-capacity problem, and a lopsided one.
-Dying to a PKer keeps three items unskulled and none skulled, and an
-ammunition stack never occupies one of those slots, so **every arrow you carry
-in and do not fire is simply given away.** Bring too few and the trip ends
-early; bring too many and you hand the surplus to whoever kills you.
+Dying to a PKer keeps three items unskulled and none skulled, so **an arrow you
+carry in and do not fire is an arrow you are quite likely to hand over.** Bring
+too few and the trip ends early; bring too many and you are carrying a surplus
+for whoever kills you.
+
+An earlier version of this said something stronger — that an ammunition stack
+*never* occupies one of those three slots, so the surplus is given away
+outright. **That is not verified, and the wiki does not support it.** The Items
+Kept on Death mechanic ranks candidates in order of value, first by effective
+Grand Exchange value and then by alchemy value; the words *stack*, *stackable*,
+*quantity* and *unit price* appear nowhere in that rule, and there is no
+ammunition row anywhere on the page. The one sentence that does use "stackable"
+cuts the other way — *"when players are 3-iteming, they should also keep their
+ammo and any stackable items down to a minimum"* — which would be pointless
+advice if ammunition could never be kept. The sibling `../dangerous-teleport`
+already refuses to subtract keep slots for exactly this reason, calling
+unit-versus-stack ranking a rule it has not verified; this plugin should not
+have been asserting the same unverified rule in the opposite direction.
+
+Nothing here depends on it. Carrying less into the Wilderness than you would
+otherwise is good whether the surplus is lost outright or merely put at risk,
+and the number this plugin measures — what a kill actually costs — is the same
+either way.
 
 The answer wanted is "for N kills of this monster, how much do I need?", and
 the decision that governs the whole design is **measure, do not model.**
@@ -183,11 +202,22 @@ There is no bundled stats table and there is not going to be one. Nineteen of
 Krystilia's thirty-six tasks are umbrellas — "spider" spans Venenatis, Spindel
 and every giant spider in the game; "bear" spans Callisto, Artio and ordinary
 bears; "skeleton" spans Vet'ion, Calvar'ion and the Wilderness skeletons — and
-hitpoints across one of those differ by a factor of ten to twenty. A generated
-table keyed on a task name has to pick one, and a draft of exactly that
-resolved "spider" to a giant spider with **two** hitpoints. Asking the monster
-standing in front of you cannot make that mistake, because there is no name to
-resolve.
+hitpoints across one of those differ by **a factor of 425**: the spider task
+runs from the plain Spider at 2 to Venenatis at 850. A generated table keyed on
+a task name has to pick one of those. Asking the monster standing in front of
+you cannot make that mistake, because there is no name to resolve.
+
+Two corrections to that paragraph, both found by a review reading it against
+the wiki, and both of which made the argument *stronger* — which is why they
+survived. It used to say "a factor of ten to twenty"; the real spread is 425,
+or 170 if you start from a giant spider rather than the plain one. And it used
+to illustrate the point with "a draft resolved 'spider' to a giant spider with
+**two** hitpoints". No giant spider has two hitpoints; the three variants are 5,
+32 and 50. The 2 is the weakest one's *combat level*, and it is also the plain
+Spider's *hitpoints* — a different monster, combat level 1. **The anecdote used
+to argue against a bundled stats table was itself a name-and-column resolution
+error of precisely the kind it warns about.** That is a better illustration than
+the one it replaced, so it is written down rather than tidied away.
 
 ## Known limitations
 
@@ -198,8 +228,13 @@ Written down rather than rounded off.
   and ursine, thammaron's sceptre and accursed — spend ether from a charge
   counter (`VarbitID.CHARGES_WILDERNESS_WEAPON_QUANTITY`), not from the
   inventory. Ether only ever leaves a container when you *charge* the weapon,
-  which is one bulk action at a bank rather than a per-kill cost. A container
-  diff therefore reports zero ether per kill, correctly and uselessly. Reading
+  which is a bulk action rather than a per-kill cost — and it moves the other way
+  too: `Uncharge` returns the remaining ether to your inventory, so the container
+  can gain a few thousand units in one click that has nothing to do with any
+  kill. (Charging does not have to happen at a bank, which an earlier draft of
+  this said; the bank interface offers a `Configure-Charges` convenience, but the
+  weapon can be charged wherever you are standing.) A container diff therefore
+  reports zero ether per kill, correctly and uselessly. Reading
   the varbit would work, but a swap between two charged weapons moves that
   counter for reasons that are not attacks, and shipping an unverified channel
   that can charge thousands of units to one kill is worse than a stated gap.
@@ -270,10 +305,15 @@ Written down rather than rounded off.
   now last in "wanted from a real client" — if the decrement lands a tick later
   than the click, neither happens.
 - **Everything is still in memory, and the session is the sample.** Nothing is
-  written to disk, on purpose: a plugin that writes files is reviewed by hand at
-  the Plugin Hub instead of automatically. So the confidence word resets to `no
-  data` every time the plugin is restarted, and a trip planned in the first
-  half-hour of a session is planned off whatever that half-hour measured.
+  written to disk, on purpose: the measurement approach is not settled enough to
+  be worth a file format that would then need migrating, and persistence is its
+  own slice. So the confidence word resets to `no data` every time the plugin is
+  restarted, and a trip planned in the first half-hour of a session is planned
+  off whatever that half-hour measured. (This used to be justified with "a plugin
+  that writes files is reviewed by hand at the Plugin Hub instead of
+  automatically." **Nothing supports that** — not the plugin-hub README, not its
+  tooling, not the wiki. The hub's only file rule is about location: read and
+  write inside `.runelite` and nowhere else.)
 - **The plan is for the monster you last killed, and only that one.** A task
   with two monsters in it — a Wilderness "spider" spawn that mixes ids — plans
   for whichever you finished most recently. The other's record is still being

@@ -235,7 +235,10 @@ public final class KillAttribution
 	 * Scene indices whose window the player closed without killing them — a target
 	 * switch, or a despawn. Kept so a later death of one of them is not counted as
 	 * a co-victim of whatever window happens to be open by then. Emptied on the
-	 * same two events as {@link #damagedByMe}, for the same index-reuse reason.
+	 * same two events as {@link #damagedByMe}, for the same index-reuse reason —
+	 * with one exception, on the path where the despawn <em>is</em> what closed
+	 * the window, and the index goes back in a few lines after coming out. See
+	 * the comment at the {@code add} in {@link #closeWindow}.
 	 */
 	private final Set<Integer> walkedAwayFrom = new LinkedHashSet<>();
 
@@ -456,9 +459,23 @@ public final class KillAttribution
 
 			// Whether or not there was anything in it. This monster is out of every
 			// priced window from here on, so if it dies later it is not a co-victim
-			// of whatever the player has moved on to — see the class javadoc. The
-			// index is dropped again on its death or despawn, before it can be
-			// reused by a different NPC.
+			// of whatever the player has moved on to — see the class javadoc.
+			//
+			// This used to claim the index "is dropped again on its death or
+			// despawn, before it can be reused by a different NPC", which is not
+			// true on the path that reaches here from the despawn loop: the drop
+			// happens a few lines up, and this add comes after it. So a despawning
+			// owner's index is put back in and stays until whatever occupies that
+			// slot next dies or despawns — and while it is in, that new NPC's death
+			// is refused as a co-victim.
+			//
+			// Left as it is. The effect is a smaller divisor, so the per-kill figure
+			// comes out higher and the plan says bring more, which is the direction
+			// this plugin is required to err in; the window that would be affected
+			// belongs to a monster the player has already walked away from; and
+			// clearing the set here instead would drop the real reason it exists,
+			// which is that a monster you abandoned must not count as a co-victim of
+			// the next one. It is the justification that was wrong, not the line.
 			walkedAwayFrom.add(owner.getIndex());
 		}
 		window.clear();

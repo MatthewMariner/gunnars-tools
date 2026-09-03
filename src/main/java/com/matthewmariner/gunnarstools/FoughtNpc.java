@@ -13,12 +13,25 @@ import net.runelite.api.NPCComposition;
  * "Spider" is Venenatis and Spindel and every giant spider in the game;
  * "bear" is Callisto and Artio and ordinary bears; "skeleton" is Vet'ion and
  * Calvar'ion and the skeletons in the Wilderness. Hitpoints across one of those
- * umbrellas differ by a factor of ten to twenty. A generated lookup keyed on the
- * task name has to pick one, and a draft of exactly that resolved "spider" to a
- * giant spider with <b>two</b> hitpoints — which would have been carried
- * forward into every later milestone's arithmetic as if it were a fact. Asking
- * the NPC that is standing in front of the player cannot make that mistake,
- * because there is no name to resolve: the monster is already picked.
+ * umbrellas differ by <b>two and a half orders of magnitude</b>: the spider task
+ * spans the plain Spider at 2 and Venenatis at 850, a factor of 425, and even
+ * starting from a giant spider's 5 it is 170. A generated lookup keyed on the
+ * task name has to pick one of those. Asking the NPC that is standing in front
+ * of the player cannot make that mistake, because there is no name to resolve:
+ * the monster is already picked.
+ *
+ * <p><b>The anecdote this argument used to carry was itself the error it warns
+ * about.</b> It said a draft of that lookup resolved "spider" to "a giant spider
+ * with <b>two</b> hitpoints". No giant spider has two hitpoints — the wiki gives
+ * the three variants 5, 32 and 50 — and the number 2 belongs to two different
+ * columns nearby: it is the weakest giant spider's <em>combat level</em>, and it
+ * is the <em>hitpoints</em> of the plain Spider, a different monster whose own
+ * combat level is 1. Reading a stat off the wrong row of a table, or off the
+ * right row of the wrong table, is exactly the failure mode named in the
+ * paragraph above, and it survived in the paragraph making the case against it.
+ * It is left written down here rather than silently fixed, because "the argument
+ * was right and the evidence for it was mis-read" is the thing worth
+ * remembering.
  *
  * <p><b>The stats array defaults to {@code {1,1,1,1,1,1}}, not to zeros.</b>
  * This is the trap the whole class exists to handle. A stat the cache never

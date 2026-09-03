@@ -10,13 +10,25 @@ import javax.annotation.Nullable;
  * Every {@link NpcAmmoRecord} measured this session, by NPC id.
  *
  * <p><b>In memory only.</b> Nothing here touches the disk, and that is a
- * decision rather than an omission: a plugin that writes files is reviewed by
- * hand at the Plugin Hub instead of automatically, and the measurement approach
- * is not settled enough yet to be worth spending that on. It also means the
- * numbers are only as good as the session that produced them, which is honest
- * for a first milestone — a per-kill figure from four kills is not one to plan a
- * trip on, and the sample count sits next to every figure so nobody has to
- * guess.
+ * decision rather than an omission: the measurement approach is not settled
+ * enough to be worth a file format that would then have to be migrated, and
+ * persistence is a slice of its own rather than a line in this one. It also
+ * means the numbers are only as good as the session that produced them, which is
+ * honest for a first milestone — a per-kill figure from four kills is not one to
+ * plan a trip on, and the sample count sits next to every figure so nobody has
+ * to guess.
+ *
+ * <p><b>What this decision is <em>not</em> justified by, any more.</b> It used to
+ * be argued here that "a plugin that writes files is reviewed by hand at the
+ * Plugin Hub instead of automatically." <b>That is unverified and nothing
+ * supports it</b> — not the plugin-hub README, not its tooling, not the RuneLite
+ * wiki. The hub's only file-related rule is about <em>location</em> ("only
+ * read/write files inside the {@code .runelite} directory", which is in this
+ * repository's own {@code AGENTS.md}), and the one thing its README names as
+ * requiring a maintainer by hand is dependency verification, not file I/O. The
+ * design stands perfectly well on its own; it did not need a review-process
+ * consequence invented for it, and an argument resting on a made-up rule is
+ * weaker than the same argument resting on nothing.
  *
  * <p>Insertion-ordered, so a dump reads in the order monsters were fought.
  */
