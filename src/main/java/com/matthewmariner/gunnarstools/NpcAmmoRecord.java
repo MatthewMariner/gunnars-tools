@@ -1,6 +1,13 @@
 package com.matthewmariner.gunnarstools;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import javax.annotation.Nullable;
 
 /**
  * Everything measured about one monster id: what it costs to kill, how many
@@ -45,6 +52,27 @@ import java.util.Map;
  * things that have nothing to do with ammunition, and the column would stop
  * meaning "your consumption figure may be contaminated" — which is the only
  * thing it is for.
+ *
+ * <h2>The individual kills are kept, not just their total</h2>
+ *
+ * <p>{@link #estimates()} needs the spread, and a running sum cannot produce
+ * one. So every kill appends one entry per item id to a {@link KillSamples}
+ * series, and the invariant those series hold is worth stating because it is the
+ * thing that most easily rots: <b>every series is exactly as long as
+ * {@link #getKills()}, and sums to exactly that item's consumed total.</b>
+ *
+ * <p>Holding it costs a little bookkeeping in both directions. A kill that spent
+ * nothing of an item already being tracked still appends a zero — dropping it
+ * would raise the mean of what is left. And an item first seen on the fiftieth
+ * kill is backfilled with forty-nine zeros, because forty-nine kills really did
+ * cost none of it; the alternative is a series of length one sitting next to a
+ * kill count of fifty, and a mean that disagrees with
+ * {@link #consumedPerKill(int)} by a factor of fifty.
+ *
+ * <p>The memory is one {@code long} per kill per item id, for the session. A
+ * long Wilderness trip is a few hundred kills against two or three ids: tens of
+ * kilobytes, which is not worth a cap that would distort the percentiles it
+ * capped.
  */
 public final class NpcAmmoRecord
 {
@@ -57,10 +85,16 @@ public final class NpcAmmoRecord
 	private int kills;
 	private final AmmoTally lifetime = new AmmoTally();
 
+	/** Item id to one entry per kill. See the class javadoc for the invariant. */
+	private final Map<Integer, KillSamples> samples = new LinkedHashMap<>();
+
 	private int abandonedFights;
 	private final AmmoTally abandoned = new AmmoTally();
 
 	private int unattributedDeaths;
+
+	/** Monsters killed by the windows this record priced, other than the kills. */
+	private int pricedCoVictims;
 
 	NpcAmmoRecord(FoughtNpc npc)
 	{
@@ -87,10 +121,54 @@ public final class NpcAmmoRecord
 		}
 	}
 
-	void recordKill(AmmoTally window)
+	/**
+	 * @param coVictims other monsters killed by this same window, from
+	 *                  {@link Attribution#getCoVictims()}. There is deliberately
+	 *                  no one-argument convenience overload: it would have exactly
+	 *                  one caller, none of them {@link AmmoLedger}, and a
+	 *                  {@code recordKill(window)} sitting in the class would be a
+	 *                  standing invitation to book a kill without its denominator.
+	 */
+	void recordKill(AmmoTally window, int coVictims)
 	{
 		kills++;
+		pricedCoVictims += coVictims;
+		appendSamples(window);
 		lifetime.addConsumedAndRelevantGains(window);
+	}
+
+	/**
+	 * Extends every series by this kill, keeping them all the length of
+	 * {@link #getKills()}.
+	 *
+	 * <p>Two loops rather than one, and they are not interchangeable. The first
+	 * appends to every id already tracked — including a zero for the ones this
+	 * kill did not touch. The second backfills an id seen for the first time, and
+	 * has to run afterwards because inserting into the map while the first loop
+	 * iterates it is a {@code ConcurrentModificationException} in production and
+	 * nowhere else.
+	 */
+	private void appendSamples(AmmoTally window)
+	{
+		for (Map.Entry<Integer, KillSamples> entry : samples.entrySet())
+		{
+			entry.getValue().add(window.consumedOf(entry.getKey()));
+		}
+
+		for (Integer itemId : window.getConsumed().keySet())
+		{
+			if (samples.containsKey(itemId))
+			{
+				continue;
+			}
+			final KillSamples series = new KillSamples();
+			for (int earlier = 1; earlier < kills; earlier++)
+			{
+				series.add(0L);
+			}
+			series.add(window.consumedOf(itemId));
+			samples.put(itemId, series);
+		}
 	}
 
 	void recordAbandoned(AmmoTally window)
@@ -154,6 +232,90 @@ public final class NpcAmmoRecord
 	}
 
 	/**
+	 * @return other monsters killed by the windows this record priced. Zero for
+	 * every single-target trip there is.
+	 */
+	public int getPricedCoVictims()
+	{
+		return pricedCoVictims;
+	}
+
+	/**
+	 * @return how many monsters the priced windows actually killed — the kills
+	 * plus their co-victims. This, not {@link #getKills()}, is the denominator a
+	 * projection wants; see {@link ConsumptionEstimate}.
+	 */
+	public int getMonstersPriced()
+	{
+		return kills + pricedCoVictims;
+	}
+
+	/**
+	 * @return gross quantity of this item per monster killed, or 0 with no
+	 * samples. Identical to {@link #consumedPerKill(int)} whenever nothing died to
+	 * splash damage.
+	 */
+	public double consumedPerMonster(int itemId)
+	{
+		final int monsters = getMonstersPriced();
+		if (monsters == 0)
+		{
+			return 0.0d;
+		}
+		return (double) lifetime.consumedOf(itemId) / monsters;
+	}
+
+	/**
+	 * @return the full estimate for one item, or null if this monster has never
+	 * been measured spending it. Null rather than a zeroed estimate: "no arrows
+	 * were ever spent on this" and "arrows cost nothing here" are different
+	 * claims, and only one of them is ever true.
+	 */
+	@Nullable
+	public ConsumptionEstimate estimate(int itemId)
+	{
+		final KillSamples series = samples.get(itemId);
+		if (series == null)
+		{
+			return null;
+		}
+		return ConsumptionEstimate.of(itemId, series, getMonstersPriced(), lifetime.gainedOf(itemId));
+	}
+
+	/**
+	 * @return one estimate per item this monster has cost, dearest first, with the
+	 * item id as a tie-break so the order does not shuffle between reads
+	 */
+	public List<ConsumptionEstimate> estimates()
+	{
+		final List<ConsumptionEstimate> out = new ArrayList<>(samples.size());
+		samples.forEach((itemId, series) -> out.add(
+			ConsumptionEstimate.of(itemId, series, getMonstersPriced(), lifetime.gainedOf(itemId))));
+
+		out.sort(Comparator.comparingLong(ConsumptionEstimate::getConsumed).reversed()
+			.thenComparingInt(ConsumptionEstimate::getItemId));
+
+		return Collections.unmodifiableList(out);
+	}
+
+	/** Every item id this monster has been measured spending. */
+	public Set<Integer> getConsumedItemIds()
+	{
+		return Collections.unmodifiableSet(samples.keySet());
+	}
+
+	public int getNpcId()
+	{
+		return npcId;
+	}
+
+	/** For the overlay's title. Nothing decides anything from it. */
+	public String getNpcName()
+	{
+		return npcName;
+	}
+
+	/**
 	 * @return whether the stats stored here are anything other than the cache's
 	 * all-ones default. See {@link FoughtNpc#hasStats()} — this is not the same
 	 * question as "is the array non-null", and it is not "is any entry non-zero"
@@ -179,6 +341,7 @@ public final class NpcAmmoRecord
 	public String toString()
 	{
 		return "NpcAmmoRecord(" + npcName + " #" + npcId + ", kills=" + kills
+			+ ", monstersPriced=" + getMonstersPriced()
 			+ ", consumed=" + lifetime.getConsumed()
 			+ ", recovered=" + lifetime.getGained()
 			+ ", abandoned=" + abandonedFights + "x" + abandoned.getConsumed()

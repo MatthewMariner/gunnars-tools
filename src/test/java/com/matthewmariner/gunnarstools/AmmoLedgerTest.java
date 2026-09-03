@@ -2,6 +2,7 @@ package com.matthewmariner.gunnarstools;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import net.runelite.api.NPCComposition;
 import org.junit.Test;
@@ -252,6 +253,220 @@ public class AmmoLedgerTest
 		assertEquals(200, ledger.get(SPINDEL).getStat(NPCComposition.STAT_HITPOINTS));
 	}
 
+	// --- the samples behind the mean ------------------------------------------
+
+	@Test
+	public void everyKillLeavesOneSampleBehindAndTheySumToTheTotal()
+	{
+		// The invariant the whole spread rests on: one entry per kill, summing to
+		// the consumed column. A series that drifted out of step with the kill
+		// count would put a percentile from four kills next to an "n=6".
+		AmmoLedger ledger = new AmmoLedger();
+
+		ledger.apply(Attribution.kill(spindel(40), spent(30)));
+		ledger.apply(Attribution.kill(spindel(41), spent(20)));
+		ledger.apply(Attribution.kill(spindel(42), spent(25)));
+
+		ConsumptionEstimate estimate = ledger.get(SPINDEL).estimate(ARROW);
+		assertEquals(3, estimate.getAttributedKills());
+		assertEquals(75L, estimate.getConsumed());
+		assertEquals(20L, estimate.getLowestKill());
+		assertEquals(25L, estimate.getMedianKill());
+		assertEquals(30L, estimate.getHighestKill());
+	}
+
+	@Test
+	public void aKillThatSpentNothingOfAnItemStillCountsAsASampleOfIt()
+	{
+		// Dropping the zero would leave two samples against three kills, and the
+		// mean of what was left would be fifteen instead of ten.
+		AmmoLedger ledger = new AmmoLedger();
+
+		ledger.apply(Attribution.kill(spindel(40), spent(15)));
+		ledger.apply(Attribution.kill(spindel(41), tally(Collections.emptyMap(), Collections.emptyMap())));
+		ledger.apply(Attribution.kill(spindel(42), spent(15)));
+
+		ConsumptionEstimate estimate = ledger.get(SPINDEL).estimate(ARROW);
+		assertEquals(3, estimate.getAttributedKills());
+		assertEquals(10.0d, estimate.getPerAttributedKill(), 1e-9d);
+		assertEquals("and the plugin says so rather than hiding it",
+			2, estimate.getKillsWithConsumption());
+		assertEquals(0L, estimate.getLowestKill());
+	}
+
+	@Test
+	public void anItemFirstSeenLateIsBackfilledSoItsMeanMatchesTheTotal()
+	{
+		// Switching ammunition mid-session. The four kills before the switch really
+		// did cost no bolts, and a series that started at the switch would report
+		// forty bolts per kill instead of eight.
+		AmmoLedger ledger = new AmmoLedger();
+		final int BOLT = 9144;
+
+		for (int kill = 40; kill < 44; kill++)
+		{
+			ledger.apply(Attribution.kill(spindel(kill), spent(30)));
+		}
+		ledger.apply(Attribution.kill(spindel(44), tally(one(BOLT, 40), Collections.emptyMap())));
+
+		NpcAmmoRecord record = ledger.get(SPINDEL);
+		ConsumptionEstimate bolts = record.estimate(BOLT);
+		assertEquals(5, bolts.getAttributedKills());
+		assertEquals(8.0d, bolts.getPerAttributedKill(), 1e-9d);
+		assertEquals("it matches what the record's own division says",
+			record.consumedPerKill(BOLT), bolts.getPerAttributedKill(), 1e-9d);
+		assertEquals(1, bolts.getKillsWithConsumption());
+
+		// And the arrows are unharmed by the newcomer.
+		assertEquals(5, record.estimate(ARROW).getAttributedKills());
+		assertEquals(24.0d, record.estimate(ARROW).getPerAttributedKill(), 1e-9d);
+	}
+
+	@Test
+	public void anItemThisMonsterHasNeverCostHasNoEstimateRatherThanAZeroedOne()
+	{
+		AmmoLedger ledger = new AmmoLedger();
+		ledger.apply(Attribution.kill(spindel(40), spent(30)));
+
+		assertNull(ledger.get(SPINDEL).estimate(COINS));
+		assertEquals(Collections.singleton(ARROW), ledger.get(SPINDEL).getConsumedItemIds());
+	}
+
+	@Test
+	public void estimatesComeBackDearestFirst()
+	{
+		AmmoLedger ledger = new AmmoLedger();
+		Map<Integer, Long> both = new LinkedHashMap<>();
+		both.put(ARROW, 25L);
+		both.put(COINS, 4000L);
+		ledger.apply(Attribution.kill(spindel(40), tally(both, Collections.emptyMap())));
+
+		List<ConsumptionEstimate> estimates = ledger.get(SPINDEL).estimates();
+		assertEquals(2, estimates.size());
+		assertEquals(COINS, estimates.get(0).getItemId());
+		assertEquals(ARROW, estimates.get(1).getItemId());
+	}
+
+	@Test
+	public void theEstimateListIsNotEditableFromOutside()
+	{
+		// An overlay holds this list for as long as a frame takes to draw. It must
+		// not be able to reorder the record's own view of itself.
+		AmmoLedger ledger = new AmmoLedger();
+		ledger.apply(Attribution.kill(spindel(40), spent(30)));
+
+		try
+		{
+			ledger.get(SPINDEL).estimates().clear();
+			org.junit.Assert.fail("the estimate list must be read-only");
+		}
+		catch (UnsupportedOperationException expected)
+		{
+			assertEquals(1, ledger.get(SPINDEL).estimates().size());
+		}
+	}
+
+	@Test
+	public void onlyAKillEverCarriesACoVictimCount()
+	{
+		// An abandoned window's ammunition is out of the average entirely, so a
+		// co-victim count on it would be a divisor with no dividend; an
+		// unattributed death is itself somebody else's co-victim. Pinned because
+		// the record trusts the verdict rather than re-deriving it.
+		assertEquals(0, Attribution.abandoned(spindel(40), spent(90)).getCoVictims());
+		assertEquals(0, Attribution.unattributedDeath(spindel(41)).getCoVictims());
+		assertEquals(2, Attribution.kill(spindel(42), spent(4), 2).getCoVictims());
+	}
+
+	// --- the corrected denominator --------------------------------------------
+
+	@Test
+	public void coVictimsRaiseTheMonsterCountWithoutRaisingTheKillCount()
+	{
+		// The four-barrage case from the README, run through the record: sixteen
+		// runes, four priced kills, twelve monsters dead.
+		AmmoLedger ledger = new AmmoLedger();
+		for (int index = 40; index < 44; index++)
+		{
+			ledger.apply(Attribution.kill(spindel(index), spent(4), 2));
+		}
+
+		NpcAmmoRecord record = ledger.get(SPINDEL);
+		assertEquals(4, record.getKills());
+		assertEquals(8, record.getPricedCoVictims());
+		assertEquals(12, record.getMonstersPriced());
+		assertEquals("cost per kill the plugin could price", 4.0d,
+			record.consumedPerKill(ARROW), 1e-9d);
+		assertEquals("cost per monster that actually died", 16.0d / 12.0d,
+			record.consumedPerMonster(ARROW), 1e-9d);
+	}
+
+	@Test
+	public void withoutAreaDamageTheTwoDenominatorsAreTheSameNumber()
+	{
+		AmmoLedger ledger = new AmmoLedger();
+		ledger.apply(Attribution.kill(spindel(40), spent(30)));
+		ledger.apply(Attribution.kill(spindel(41), spent(20)));
+
+		NpcAmmoRecord record = ledger.get(SPINDEL);
+		assertEquals(2, record.getMonstersPriced());
+		assertEquals(0, record.getPricedCoVictims());
+		assertEquals(record.consumedPerKill(ARROW), record.consumedPerMonster(ARROW), 1e-9d);
+		assertFalse(record.estimate(ARROW).isAreaDamageSeen());
+	}
+
+	@Test
+	public void anUnattributedDeathDoesNotQuietlyBecomeACoVictim()
+	{
+		// The difference between the correction this record applies and the
+		// simpler one the README's limitation section suggested. An unattributed
+		// death whose ammunition went into the abandoned column must not raise the
+		// denominator, or the per-monster figure comes out low — and low is the
+		// direction that ends a trip early.
+		AmmoLedger ledger = new AmmoLedger();
+		ledger.apply(Attribution.kill(spindel(40), spent(30)));
+		ledger.apply(Attribution.abandoned(spindel(41), spent(90)));
+		ledger.apply(Attribution.unattributedDeath(spindel(41)));
+
+		NpcAmmoRecord record = ledger.get(SPINDEL);
+		assertEquals(1, record.getUnattributedDeaths());
+		assertEquals("the monster count only counts what a priced window killed",
+			1, record.getMonstersPriced());
+		assertEquals(30.0d, record.consumedPerMonster(ARROW), 1e-9d);
+	}
+
+	// --- what the plan is for -------------------------------------------------
+
+	@Test
+	public void theLedgerRemembersWhichMonsterWasKilledLast()
+	{
+		AmmoLedger ledger = new AmmoLedger();
+		assertNull("nothing has been killed yet", ledger.getMostRecentKill());
+
+		ledger.apply(Attribution.kill(spindel(40), spent(30)));
+		assertEquals(SPINDEL, ledger.getMostRecentKill().getNpcId());
+
+		ledger.apply(Attribution.kill(
+			new FoughtNpc(41, VENENATIS, "Venenatis", new int[]{200, 200, 200, 500, 1, 200}),
+			spent(120)));
+		assertEquals(VENENATIS, ledger.getMostRecentKill().getNpcId());
+	}
+
+	@Test
+	public void walkingPastSomethingDoesNotRepointTheShoppingList()
+	{
+		AmmoLedger ledger = new AmmoLedger();
+		ledger.apply(Attribution.kill(spindel(40), spent(30)));
+
+		ledger.apply(Attribution.abandoned(
+			new FoughtNpc(41, VENENATIS, "Venenatis", new int[]{200, 200, 200, 500, 1, 200}),
+			spent(5)));
+		ledger.apply(Attribution.unattributedDeath(
+			new FoughtNpc(42, VENENATIS, "Venenatis", new int[]{200, 200, 200, 500, 1, 200})));
+
+		assertEquals("only a kill moves it", SPINDEL, ledger.getMostRecentKill().getNpcId());
+	}
+
 	// --- housekeeping ---------------------------------------------------------
 
 	@Test
@@ -273,6 +488,8 @@ public class AmmoLedgerTest
 		assertTrue(ledger.isEmpty());
 		assertEquals(0, ledger.size());
 		assertNull(ledger.get(SPINDEL));
+		assertNull("including the monster the plan was about",
+			ledger.getMostRecentKill());
 	}
 
 	@Test

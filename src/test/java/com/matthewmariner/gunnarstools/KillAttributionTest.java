@@ -674,7 +674,303 @@ public class KillAttributionTest
 		assertTrue(attribution.tickEnded(spent(ARROW, 946)).isEmpty());
 	}
 
+	// --- co-victims: how many monsters a priced window actually killed --------
+
+	@Test
+	public void aBarrageThatKillsThreeChargesOneWindowAndCountsTwoCoVictims()
+	{
+		// One window of four runes, three monsters dead. Refusing to split it keeps
+		// the numerator honest; counting the co-victims is what lets a later
+		// division produce a cost per monster rather than a cost per priced kill.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc target = spider(40);
+
+		attribution.interacting(target);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+
+		attribution.damagedByMe(target);
+		attribution.damagedByMe(spider(41));
+		attribution.damagedByMe(spider(42));
+		attribution.npcDied(target);
+		attribution.npcDied(spider(41));
+		attribution.npcDied(spider(42));
+
+		List<Attribution> out = attribution.tickEnded(spent(ARROW, 4));
+
+		assertEquals(3, out.size());
+		assertEquals(Attribution.Kind.KILL, out.get(0).getKind());
+		assertEquals("four runes over three monsters, not over one",
+			2, out.get(0).getCoVictims());
+		assertEquals(4L, out.get(0).getTally().consumedOf(ARROW));
+		assertEquals(Attribution.Kind.UNATTRIBUTED_DEATH, out.get(1).getKind());
+		assertEquals(Attribution.Kind.UNATTRIBUTED_DEATH, out.get(2).getKind());
+	}
+
+	@Test
+	public void aCoVictimResolvedBeforeTheKillInTheSameTickStillLandsOnIt()
+	{
+		// Deaths arrive within a tick in no guaranteed order, and a one-shot
+		// barrage delivers all of them together. Counting as the loop goes would
+		// credit these two to whatever window opens next, because the kill clears
+		// the counter partway through.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc target = spider(40);
+
+		attribution.interacting(target);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+
+		attribution.damagedByMe(target);
+		attribution.damagedByMe(spider(41));
+		attribution.damagedByMe(spider(42));
+		attribution.npcDied(spider(41));
+		attribution.npcDied(target);
+		attribution.npcDied(spider(42));
+
+		List<Attribution> out = attribution.tickEnded(spent(ARROW, 4));
+
+		assertEquals(Attribution.Kind.UNATTRIBUTED_DEATH, out.get(0).getKind());
+		assertEquals(Attribution.Kind.KILL, out.get(1).getKind());
+		assertEquals("arrival order within the tick must not change the count",
+			2, out.get(1).getCoVictims());
+		assertEquals(Attribution.Kind.UNATTRIBUTED_DEATH, out.get(2).getKind());
+	}
+
+	@Test
+	public void coVictimsAccumulateAcrossEveryCastTheWindowPaidFor()
+	{
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc target = spider(40);
+
+		attribution.interacting(target);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(target);
+
+		attribution.damagedByMe(spider(41));
+		attribution.npcDied(spider(41));
+		attribution.tickEnded(spent(ARROW, 4));
+
+		attribution.damagedByMe(spider(42));
+		attribution.npcDied(spider(42));
+		attribution.tickEnded(spent(ARROW, 4));
+
+		attribution.npcDied(target);
+		List<Attribution> out = attribution.tickEnded(spent(ARROW, 4));
+
+		assertEquals(Attribution.Kind.KILL, out.get(0).getKind());
+		assertEquals("both earlier casts killed something this window paid for",
+			2, out.get(0).getCoVictims());
+		assertEquals(12L, out.get(0).getTally().consumedOf(ARROW));
+	}
+
+	@Test
+	public void theCountRidesOnTheKillEvenWhenTheCoVictimsAreADifferentSpecies()
+	{
+		// The unattributed deaths are filed against the skeletons' own id. If the
+		// correction were applied there it would land on a record holding none of
+		// the ammunition, and the spider's figure would stay uncorrected.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc target = spider(40);
+
+		attribution.interacting(target);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+
+		attribution.damagedByMe(target);
+		attribution.damagedByMe(skeleton(41));
+		attribution.npcDied(target);
+		attribution.npcDied(skeleton(41));
+
+		List<Attribution> out = attribution.tickEnded(spent(ARROW, 6));
+
+		assertEquals(SPIDER_ID, out.get(0).getNpc().getId());
+		assertEquals(1, out.get(0).getCoVictims());
+		assertEquals(SKELETON_ID, out.get(1).getNpc().getId());
+		assertEquals("and the co-victim's own verdict carries no correction",
+			0, out.get(1).getCoVictims());
+	}
+
+	@Test
+	public void aMonsterThePlayerWalkedAwayFromIsNotACoVictimOfTheNextFight()
+	{
+		// The leak the whole exclusion exists for. The spider's fight was banked as
+		// abandoned — its ammunition is out of the numerator entirely — so letting
+		// its later death raise the skeleton's denominator would understate what
+		// the skeleton costs, and understating ends a trip early.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc walkedAwayFrom = spider(40);
+		FoughtNpc newTarget = skeleton(41);
+
+		attribution.interacting(walkedAwayFrom);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(walkedAwayFrom);
+		attribution.tickEnded(spent(ARROW, 3));
+
+		attribution.interacting(newTarget);
+		List<Attribution> abandoned = attribution.tickEnded(AmmoDelta.EMPTY);
+		assertEquals(Attribution.Kind.ABANDONED, abandoned.get(0).getKind());
+
+		attribution.damagedByMe(newTarget);
+		attribution.tickEnded(spent(ARROW, 2));
+
+		// Somebody else finishes the spider off.
+		attribution.npcDied(walkedAwayFrom);
+		List<Attribution> stray = attribution.tickEnded(AmmoDelta.EMPTY);
+		assertEquals(Attribution.Kind.UNATTRIBUTED_DEATH, stray.get(0).getKind());
+		assertEquals("a fight already banked as abandoned is not a co-victim",
+			0, attribution.getWindowCoVictims());
+
+		attribution.npcDied(newTarget);
+		List<Attribution> out = attribution.tickEnded(spent(ARROW, 1));
+
+		assertEquals(Attribution.Kind.KILL, out.get(0).getKind());
+		assertEquals(0, out.get(0).getCoVictims());
+		assertEquals(3L, out.get(0).getTally().consumedOf(ARROW));
+	}
+
+	@Test
+	public void aDeathWithNoWindowOpenIsNotACoVictimOfAnything()
+	{
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc target = spider(40);
+		FoughtNpc bystander = spider(41);
+
+		attribution.interacting(target);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(target);
+		attribution.damagedByMe(bystander);
+		attribution.npcDied(target);
+		attribution.tickEnded(spent(ARROW, 5));
+
+		assertNull("the window closed with the kill", attribution.getOwner());
+
+		attribution.npcDied(bystander);
+		List<Attribution> out = attribution.tickEnded(AmmoDelta.EMPTY);
+
+		assertEquals(Attribution.Kind.UNATTRIBUTED_DEATH, out.get(0).getKind());
+		assertEquals("there is no window for it to be a co-victim of",
+			0, attribution.getWindowCoVictims());
+	}
+
+	@Test
+	public void theCoVictimCountIsClearedWithTheWindowItBelongedTo()
+	{
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc first = spider(40);
+
+		attribution.interacting(first);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(first);
+		attribution.damagedByMe(spider(41));
+		attribution.npcDied(spider(41));
+		attribution.tickEnded(spent(ARROW, 4));
+		assertEquals(1, attribution.getWindowCoVictims());
+
+		attribution.npcDied(first);
+		attribution.tickEnded(spent(ARROW, 4));
+
+		assertEquals("the next fight starts from zero, not from one",
+			0, attribution.getWindowCoVictims());
+
+		FoughtNpc second = spider(42);
+		attribution.interacting(second);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(second);
+		attribution.npcDied(second);
+		List<Attribution> out = attribution.tickEnded(spent(ARROW, 5));
+
+		assertEquals(0, out.get(0).getCoVictims());
+	}
+
+	@Test
+	public void aWindowAbandonedMidBarrageDoesNotHandItsCoVictimsToTheNextFight()
+	{
+		// The co-victim count belongs to the window that paid for it. Left standing
+		// when the player switches targets, it would divide the next monster's cost
+		// by monsters it never killed — an understatement, and understating is what
+		// ends a trip early.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc first = spider(40);
+		FoughtNpc second = skeleton(41);
+
+		attribution.interacting(first);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(first);
+		attribution.damagedByMe(spider(42));
+		attribution.npcDied(spider(42));
+		attribution.tickEnded(spent(ARROW, 4));
+		assertEquals("the count has to be there before dropping it means anything",
+			1, attribution.getWindowCoVictims());
+
+		attribution.interacting(second);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		assertEquals(0, attribution.getWindowCoVictims());
+
+		attribution.damagedByMe(second);
+		attribution.npcDied(second);
+		List<Attribution> out = attribution.tickEnded(spent(ARROW, 6));
+
+		assertEquals(Attribution.Kind.KILL, out.get(0).getKind());
+		assertEquals("the skeleton killed nothing but itself", 0, out.get(0).getCoVictims());
+	}
+
+	@Test
+	public void aDespawnedIndexIsForgottenBeforeItsSlotIsReused()
+	{
+		// The walked-away mark is keyed by scene index, and indices are recycled.
+		// Left in place it would silently exempt the next occupant of slot 40 from
+		// ever being counted as a co-victim.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc target = spider(40);
+
+		attribution.interacting(target);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(target);
+		attribution.tickEnded(spent(ARROW, 3));
+
+		attribution.interacting(skeleton(41));
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		assertEquals(1, attribution.getWalkedAwayCount());
+
+		attribution.npcDespawned(40);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+
+		assertEquals("index 40 means a different monster now",
+			0, attribution.getWalkedAwayCount());
+	}
+
 	// --- reset ---------------------------------------------------------------
+
+	@Test
+	public void resetForgetsBothCoVictimBooksAsWellAsTheWindow()
+	{
+		// Both books loaded at once before the reset, because a teardown test that
+		// starts from an empty state passes whether or not the teardown does
+		// anything.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc first = spider(40);
+		FoughtNpc second = spider(41);
+
+		attribution.interacting(first);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(first);
+		attribution.tickEnded(spent(ARROW, 3));
+
+		attribution.interacting(second);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+
+		attribution.damagedByMe(second);
+		attribution.damagedByMe(spider(42));
+		attribution.npcDied(spider(42));
+		attribution.tickEnded(spent(ARROW, 4));
+
+		assertEquals("the state has to be there before the reset means anything",
+			1, attribution.getWindowCoVictims());
+		assertEquals(1, attribution.getWalkedAwayCount());
+
+		attribution.reset();
+
+		assertEquals(0, attribution.getWindowCoVictims());
+		assertEquals(0, attribution.getWalkedAwayCount());
+	}
 
 	@Test
 	public void resetLeavesNothingBehind()

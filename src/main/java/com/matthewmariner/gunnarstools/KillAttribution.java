@@ -70,6 +70,49 @@ import javax.annotation.Nullable;
  * Condition 2 without condition 1 is somebody else finishing a monster the
  * player had merely clicked on. Neither is a sample.
  *
+ * <h2>Co-victims: how many monsters a priced window actually killed</h2>
+ *
+ * <p>Refusing to split a window between monsters keeps the per-kill figure
+ * honest, but it leaves the <em>published</em> figure meaning "cost per kill I
+ * could price" rather than "cost per monster", and under area damage those
+ * differ by about the number of monsters caught in each cast. A projection that
+ * multiplies the first by a task's size overstates by the same factor.
+ *
+ * <p>So the window carries a second number: how many other monsters died while
+ * it was open. When the window closes as a kill, that count rides along on the
+ * {@link Attribution}, and {@code consumed / (1 + coVictims)} is a per-monster
+ * cost derived from measurements with nothing assumed — no split invented, just
+ * a different denominator over the same window.
+ *
+ * <p>Three details make it a correction rather than a second error.
+ *
+ * <ul>
+ *   <li><b>It rides on the kill, not on the co-victim.</b> An
+ *       {@link Attribution.Kind#UNATTRIBUTED_DEATH} is filed against the dead
+ *       monster's own id, so on a cross-species barrage the divisor would land
+ *       on a record holding none of the ammunition. The count is attached to the
+ *       window instead, which is where the numerator is.</li>
+ *   <li><b>A monster the player walked away from does not count.</b> Switching
+ *       targets banks that fight's ammunition as
+ *       {@link Attribution.Kind#ABANDONED} — out of the numerator entirely — and
+ *       if it later dies to somebody else it is still an unattributed death. Let
+ *       that raise the denominator and the per-monster figure comes out
+ *       <em>low</em>, which is the direction that ends a trip early. Those
+ *       indices are remembered and excluded.</li>
+ *   <li><b>The tick is classified before it is applied.</b> A barrage's kill and
+ *       its co-victims arrive in one tick in no guaranteed order, so counting as
+ *       the loop goes would either credit the co-victims to the window that was
+ *       just closed or to the next one, depending on arrival order. Deaths are
+ *       classified against the owner the tick began with, and the kill is only
+ *       built once the whole tick's count is known.</li>
+ * </ul>
+ *
+ * <p>What it cannot rule out: a monster the player damaged, never abandoned, and
+ * which somebody else finishes off while the player is mid-fight elsewhere is
+ * indistinguishable from a splash-damage co-victim, and dilutes the per-monster
+ * figure by one. That is a far narrower leak than counting every unattributed
+ * death, and it is disclosed rather than closed.
+ *
  * <h2>Everything is decided at the tick boundary</h2>
  *
  * <p>Hitsplats, deaths, despawns and interaction changes all arrive while the
@@ -133,11 +176,25 @@ public final class KillAttribution
 	private final AmmoTally window = new AmmoTally();
 
 	/**
+	 * How many monsters other than the owner have died since the window opened.
+	 * Cleared with the window; see the class javadoc on co-victims.
+	 */
+	private int windowCoVictims;
+
+	/**
 	 * Scene indices of NPCs the player has landed a hitsplat on. Entries are
 	 * removed on death and on despawn, which is what keeps index reuse from
 	 * crediting a fresh NPC with the previous occupant's evidence.
 	 */
 	private final Set<Integer> damagedByMe = new LinkedHashSet<>();
+
+	/**
+	 * Scene indices whose window the player closed without killing them — a target
+	 * switch, or a despawn. Kept so a later death of one of them is not counted as
+	 * a co-victim of whatever window happens to be open by then. Emptied on the
+	 * same two events as {@link #damagedByMe}, for the same index-reuse reason.
+	 */
+	private final Set<Integer> walkedAwayFrom = new LinkedHashSet<>();
 
 	private final List<FoughtNpc> deathsThisTick = new ArrayList<>();
 	private final Set<Integer> despawnsThisTick = new LinkedHashSet<>();
@@ -230,31 +287,66 @@ public final class KillAttribution
 			window.add(delta);
 		}
 
-		// 2. Deaths.
+		// 2. Deaths. Classified against the owner the tick began with, and applied
+		//    afterwards, because the kill that closes the window has to carry this
+		//    tick's co-victims and they may be classified after it. See the class
+		//    javadoc.
+		//
+		//    The snapshot on the next line is defensive rather than load bearing,
+		//    and that is worth saying out loud: nothing in the loop writes `owner`
+		//    any more, so reading the field directly would behave identically and
+		//    no test can be written that fails when somebody swaps it back. It is
+		//    here so the next edit cannot quietly reintroduce the ordering bug the
+		//    deferred application below fixes — that part is covered.
+		final FoughtNpc windowOwner = owner;
+		final List<Attribution> deathVerdicts = new ArrayList<>();
+		int killSlot = -1;
+		FoughtNpc killed = null;
+		int coVictimsThisTick = 0;
+
 		for (FoughtNpc dead : deathsThisTick)
 		{
 			final boolean iDamagedIt = damagedByMe.remove(dead.getIndex());
-			final boolean itWasMyTarget = owner != null && owner.getIndex() == dead.getIndex();
+			final boolean iWalkedAwayFromIt = walkedAwayFrom.remove(dead.getIndex());
+			final boolean itWasMyTarget = windowOwner != null
+				&& windowOwner.getIndex() == dead.getIndex();
 
 			if (iDamagedIt && itWasMyTarget)
 			{
-				out.add(Attribution.kill(dead, window.copy()));
-				window.clear();
-				owner = null;
+				killSlot = deathVerdicts.size();
+				killed = dead;
+				deathVerdicts.add(null);
 			}
 			else if (iDamagedIt)
 			{
-				out.add(Attribution.unattributedDeath(dead));
+				deathVerdicts.add(Attribution.unattributedDeath(dead));
+				if (windowOwner != null && !iWalkedAwayFromIt)
+				{
+					coVictimsThisTick++;
+				}
 			}
 			// Neither: a monster somebody else killed, which in multi-combat
 			// Wilderness is most of the deaths this handler will ever see.
 		}
+
+		windowCoVictims += coVictimsThisTick;
+
+		if (killSlot >= 0)
+		{
+			deathVerdicts.set(killSlot, Attribution.kill(killed, window.copy(), windowCoVictims));
+			window.clear();
+			windowCoVictims = 0;
+			owner = null;
+		}
+
+		out.addAll(deathVerdicts);
 		deathsThisTick.clear();
 
 		// 3. Despawns.
 		for (int index : despawnsThisTick)
 		{
 			final boolean iDamagedIt = damagedByMe.remove(index);
+			walkedAwayFrom.remove(index);
 			if (owner != null && owner.getIndex() == index)
 			{
 				closeWindow(out, iDamagedIt);
@@ -300,11 +392,22 @@ public final class KillAttribution
 	 */
 	private void closeWindow(List<Attribution> out, boolean damaged)
 	{
-		if (owner != null && damaged && !window.isEmpty())
+		if (owner != null)
 		{
-			out.add(Attribution.abandoned(owner, window.copy()));
+			if (damaged && !window.isEmpty())
+			{
+				out.add(Attribution.abandoned(owner, window.copy()));
+			}
+
+			// Whether or not there was anything in it. This monster is out of every
+			// priced window from here on, so if it dies later it is not a co-victim
+			// of whatever the player has moved on to — see the class javadoc. The
+			// index is dropped again on its death or despawn, before it can be
+			// reused by a different NPC.
+			walkedAwayFrom.add(owner.getIndex());
 		}
 		window.clear();
+		windowCoVictims = 0;
 		owner = null;
 	}
 
@@ -316,7 +419,9 @@ public final class KillAttribution
 	{
 		owner = null;
 		window.clear();
+		windowCoVictims = 0;
 		damagedByMe.clear();
+		walkedAwayFrom.clear();
 		deathsThisTick.clear();
 		despawnsThisTick.clear();
 		pendingEngagement = null;
@@ -340,5 +445,17 @@ public final class KillAttribution
 	int getDamageEvidenceCount()
 	{
 		return damagedByMe.size();
+	}
+
+	/** Co-victims accumulated by the open window. Package-private, for tests. */
+	int getWindowCoVictims()
+	{
+		return windowCoVictims;
+	}
+
+	/** How many monsters are being kept out of the co-victim count. For tests. */
+	int getWalkedAwayCount()
+	{
+		return walkedAwayFrom.size();
 	}
 }

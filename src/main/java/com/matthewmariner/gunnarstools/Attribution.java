@@ -51,27 +51,48 @@ public final class Attribution
 	private final Kind kind;
 	private final FoughtNpc npc;
 	private final AmmoTally tally;
+	private final int coVictims;
 
-	private Attribution(Kind kind, FoughtNpc npc, @Nullable AmmoTally tally)
+	private Attribution(Kind kind, FoughtNpc npc, @Nullable AmmoTally tally, int coVictims)
 	{
 		this.kind = kind;
 		this.npc = npc;
 		this.tally = tally;
+		this.coVictims = coVictims;
 	}
 
+	/** A kill whose window killed nothing but the monster it is filed against. */
 	static Attribution kill(FoughtNpc npc, AmmoTally tally)
 	{
-		return new Attribution(Kind.KILL, npc, tally);
+		return kill(npc, tally, 0);
+	}
+
+	/**
+	 * @param coVictims how many <em>other</em> monsters died inside the window
+	 *                  this kill closes. Attached to the kill rather than reported
+	 *                  against the co-victims' own records, because the
+	 *                  ammunition is on this record and the correction has to
+	 *                  land where the numerator is — a barrage that catches a
+	 *                  different species would otherwise file the divisor against
+	 *                  a monster that never held a rune. See
+	 *                  {@link Kind#UNATTRIBUTED_DEATH}, which is what those
+	 *                  co-victims are also reported as, and
+	 *                  {@link ConsumptionEstimate} for what the two counts are
+	 *                  each good for.
+	 */
+	static Attribution kill(FoughtNpc npc, AmmoTally tally, int coVictims)
+	{
+		return new Attribution(Kind.KILL, npc, tally, coVictims);
 	}
 
 	static Attribution abandoned(FoughtNpc npc, AmmoTally tally)
 	{
-		return new Attribution(Kind.ABANDONED, npc, tally);
+		return new Attribution(Kind.ABANDONED, npc, tally, 0);
 	}
 
 	static Attribution unattributedDeath(FoughtNpc npc)
 	{
-		return new Attribution(Kind.UNATTRIBUTED_DEATH, npc, null);
+		return new Attribution(Kind.UNATTRIBUTED_DEATH, npc, null, 0);
 	}
 
 	public Kind getKind()
@@ -91,9 +112,21 @@ public final class Attribution
 		return tally;
 	}
 
+	/**
+	 * @return other monsters killed by the same window. Always 0 for the two kinds
+	 * that are not {@link Kind#KILL}: an abandoned window's co-victims are not
+	 * priced by anything, since its ammunition is kept out of the average, and an
+	 * unattributed death is itself somebody else's co-victim.
+	 */
+	public int getCoVictims()
+	{
+		return coVictims;
+	}
+
 	@Override
 	public String toString()
 	{
-		return "Attribution(" + kind + ", " + npc + ", " + tally + ")";
+		return "Attribution(" + kind + ", " + npc + ", " + tally
+			+ (coVictims > 0 ? ", coVictims=" + coVictims : "") + ")";
 	}
 }

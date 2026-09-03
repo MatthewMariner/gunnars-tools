@@ -1,7 +1,9 @@
 package com.matthewmariner.gunnarstools;
 
 import com.google.inject.Provides;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
@@ -21,8 +23,11 @@ import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.NpcDespawned;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.ui.overlay.Overlay;
+import net.runelite.client.ui.overlay.OverlayManager;
 
 /**
  * Gunnar's Tools — measures how much ammunition (arrows, bolts, runes) each kill
@@ -37,16 +42,18 @@ import net.runelite.client.plugins.PluginDescriptor;
  * prayers and boosts are doing. Watching the ammunition stack go down is
  * automatically correct about all of it.
  *
- * <p>Milestone 1 is the measurement and nothing else — no projection, no bank
- * highlighting, no interface. The record lives in memory for the session and
- * reports itself to the debug log as each kill lands. The pieces are
- * {@link ConsumptionMeter} (what was spent), {@link KillAttribution} (who it was
- * spent on, and which deaths were the player's) and {@link AmmoLedger} (the
- * running record per monster).
+ * <p>The measurement is {@link ConsumptionMeter} (what was spent),
+ * {@link KillAttribution} (who it was spent on, and which deaths were the
+ * player's) and {@link AmmoLedger} (the running record per monster). The answer
+ * is {@link ConsumptionEstimate} (the figure and its spread) and
+ * {@link TripPlanner} (what to bring for a trip of a given size), drawn by
+ * {@link TripPanelOverlay} and {@link BankWithdrawalOverlay}.
  *
  * <p>This class is deliberately thin. Every handler translates a RuneLite event
- * into a call on one of those three and decides nothing itself, so that the
- * decisions all live somewhere a test can reach without a game client.
+ * into a call on one of those and decides nothing itself, so that the decisions
+ * all live somewhere a test can reach without a game client. The one piece of
+ * state it owns is the cached plan below, and the reason it owns it is timing
+ * rather than logic.
  */
 @Slf4j
 @PluginDescriptor(
@@ -64,9 +71,46 @@ public class GunnarsToolsPlugin extends Plugin
 	@Inject
 	Client client;
 
-	private final ConsumptionMeter meter = new ConsumptionMeter(this::isConsumable);
+	@Inject
+	GunnarsToolsConfig config;
+
+	@Inject
+	OverlayRegistry overlayRegistry;
+
+	@Inject
+	TripPanelOverlay tripPanelOverlay;
+
+	@Inject
+	BankWithdrawalOverlay bankWithdrawalOverlay;
+
+	/**
+	 * Not private and not final, and both of those are deliberate.
+	 *
+	 * <p>The meter's filter reads the item cache off the client, so a meter built
+	 * here cannot be fed a real item id with no game running — which would leave
+	 * the single most important wiring line in the plugin, the one handing this
+	 * tick's consumption to the attribution, provable only by reading it. A test
+	 * substitutes a meter with its own filter and drives {@link #onGameTick}
+	 * directly. That is the whole reason; nothing in production replaces it.
+	 */
+	ConsumptionMeter meter = new ConsumptionMeter(this::isConsumable);
+
 	private final KillAttribution attribution = new KillAttribution();
 	private final AmmoLedger ledger = new AmmoLedger();
+
+	/**
+	 * The plan the two overlays draw, recomputed when a kill or a config change
+	 * makes it stale and never in a render loop.
+	 *
+	 * <p>Written and read on the client thread — game ticks, config events and
+	 * overlay rendering all run there — so there is nothing to synchronise. It is
+	 * cached rather than derived on demand because {@code AGENTS.md} is explicit
+	 * that per-frame work stays minimal, and building a plan sorts a sample array
+	 * per item.
+	 */
+	private List<TripPlan> plan = Collections.emptyList();
+	private Map<Integer, Long> withdrawals = Collections.emptyMap();
+	private NpcAmmoRecord planSubject;
 
 	/**
 	 * Whether {@link #startUp()} has run and {@link #shutDown()} has not yet
@@ -83,16 +127,24 @@ public class GunnarsToolsPlugin extends Plugin
 	protected void startUp()
 	{
 		log.debug("Gunnar's Tools starting");
+		overlayRegistry.add(tripPanelOverlay);
+		overlayRegistry.add(bankWithdrawalOverlay);
 		active = true;
 	}
 
 	@Override
 	protected void shutDown()
 	{
-		// The session summary, which in M1 is the whole of the user interface.
-		// Logged on the way out rather than only per kill, because a per-kill line
-		// scrolls past and this is the shape a reader actually wants: one line per
-		// monster, with the sample count each figure rests on.
+		// Removed first and synchronously. An overlay left in the manager keeps
+		// drawing, and the four lines at the bottom of this method are about to
+		// empty everything it draws from underneath it.
+		overlayRegistry.remove(tripPanelOverlay);
+		overlayRegistry.remove(bankWithdrawalOverlay);
+
+		// The session summary, which the log has carried since M1. Logged on the way
+		// out rather than only per kill, because a per-kill line scrolls past and
+		// this is the shape a reader actually wants: one line per monster, with the
+		// sample count each figure rests on.
 		log.debug("Gunnar's Tools stopping with {} monster(s) measured", ledger.size());
 		ledger.getRecords().forEach(record -> log.debug("  {}", record));
 
@@ -101,10 +153,12 @@ public class GunnarsToolsPlugin extends Plugin
 		// from a different session; the attribution holds an open window and a set
 		// of NPC indices that will mean different NPCs by the time the plugin is
 		// switched on again; the ledger holds the session's measurements, which
-		// belong to the session.
+		// belong to the session; and the plan is a projection off that ledger, so it
+		// outlives its own evidence unless it goes too.
 		meter.clear();
 		attribution.reset();
 		ledger.clear();
+		clearPlan();
 		active = false;
 	}
 
@@ -141,11 +195,62 @@ public class GunnarsToolsPlugin extends Plugin
 			primeContainers();
 		}
 
-		final List<Attribution> attributions = attribution.tickEnded(meter.tickEnded());
+		if (tickEnded(meter.tickEnded()))
+		{
+			logPlan();
+		}
+	}
+
+	/**
+	 * Resolves one tick's verdicts into the ledger and, if any of them was a kill,
+	 * into the projection.
+	 *
+	 * <p>Split out from {@link #onGameTick} so it can be run with no client: the
+	 * two lines left above it — priming the containers and resolving an item name
+	 * for the log — are the only parts of a tick that read the game, and they are
+	 * the only parts no offline test can reach.
+	 *
+	 * @return whether the tick produced a kill, and therefore a new answer
+	 */
+	boolean tickEnded(AmmoDelta delta)
+	{
+		final List<Attribution> attributions = attribution.tickEnded(delta);
+		boolean killed = false;
 		for (Attribution result : attributions)
 		{
 			ledger.apply(result);
 			log.debug("{} -> {}", result.getKind(), ledger.get(result.getNpc().getId()));
+
+			// Accumulated rather than assigned. A barrage resolves as a kill
+			// followed by its co-victims' unattributed deaths, so the last verdict
+			// of the tick is routinely not the kill.
+			killed |= result.getKind() == Attribution.Kind.KILL;
+		}
+
+		// Only a kill changes what a trip needs. An abandoned fight and an
+		// unattributed death both move columns the projection does not read, and
+		// rebuilding on every tick would sort every sample series sixty times a
+		// minute for nothing.
+		if (killed)
+		{
+			rebuildPlan();
+		}
+		return killed;
+	}
+
+	/**
+	 * The dials changed, so the answer did.
+	 *
+	 * <p>Filtered to this plugin's own group. RuneLite posts every plugin's config
+	 * changes on the same bus, and rebuilding on all of them would be a sort per
+	 * keystroke in somebody else's settings panel.
+	 */
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (GunnarsToolsConfig.GROUP.equals(event.getGroup()))
+		{
+			rebuildPlan();
 		}
 	}
 
@@ -318,7 +423,76 @@ public class GunnarsToolsPlugin extends Plugin
 		return composition != null && Ammunition.isConsumable(composition.isStackable(), composition.getNote());
 	}
 
-	/** The session's measurements. Package-private; nothing outside reads it in M1. */
+	/**
+	 * Rebuilds the cached projection for the monster last killed.
+	 *
+	 * <p>Package-private rather than private so the plugin test can drive it
+	 * without a game tick. The decisions inside it are all in
+	 * {@link TripPlanner}; what is here is the choice of subject and the caching.
+	 */
+	void rebuildPlan()
+	{
+		final NpcAmmoRecord subject = ledger.getMostRecentKill();
+		if (subject == null)
+		{
+			clearPlan();
+			return;
+		}
+
+		planSubject = subject;
+		plan = TripPlanner.plan(subject, config.tripKills(), config.safetyMarginPercent());
+		withdrawals = TripPlanner.withdrawals(plan);
+	}
+
+	/**
+	 * The claim, in words, once per kill.
+	 *
+	 * <p>The overlay says the same thing in a corner of the screen; this is the
+	 * version that survives in a log somebody can read afterwards, and it is the
+	 * one that spells out which denominator and how many samples. It lives here
+	 * rather than in {@link #rebuildPlan()} because resolving an item id to a name
+	 * is a client read, and keeping every client read at the event edge is what
+	 * lets the projection be rebuilt in a test with no game running.
+	 */
+	private void logPlan()
+	{
+		if (!log.isDebugEnabled() || plan.isEmpty() || planSubject == null)
+		{
+			return;
+		}
+		final TripPlan headline = plan.get(0);
+		final ItemComposition composition = client.getItemDefinition(headline.getItemId());
+		log.debug("{}", headline.describe(planSubject.getNpcName(),
+			composition == null ? "item " + headline.getItemId() : composition.getName()));
+	}
+
+	private void clearPlan()
+	{
+		planSubject = null;
+		plan = Collections.emptyList();
+		withdrawals = Collections.emptyMap();
+	}
+
+	/** The monster the panel and the bank highlight are about, or null for none. */
+	@Nullable
+	NpcAmmoRecord getPlanSubject()
+	{
+		return planSubject;
+	}
+
+	/** What to bring, biggest first. Never null; empty before the first kill. */
+	List<TripPlan> getPlan()
+	{
+		return plan;
+	}
+
+	/** Item id to quantity, for {@link BankWithdrawalOverlay}. */
+	Map<Integer, Long> getWithdrawals()
+	{
+		return withdrawals;
+	}
+
+	/** The session's measurements. Package-private; nothing outside reads it. */
 	AmmoLedger getLedger()
 	{
 		return ledger;
@@ -340,5 +514,29 @@ public class GunnarsToolsPlugin extends Plugin
 	GunnarsToolsConfig provideConfig(ConfigManager configManager)
 	{
 		return configManager.getConfig(GunnarsToolsConfig.class);
+	}
+
+	/**
+	 * The plugin's only overlay registration path — see {@link OverlayRegistry}
+	 * for why it goes through an interface rather than straight at
+	 * {@link OverlayManager}.
+	 */
+	@Provides
+	OverlayRegistry provideOverlayRegistry(OverlayManager overlayManager)
+	{
+		return new OverlayRegistry()
+		{
+			@Override
+			public void add(Overlay overlay)
+			{
+				overlayManager.add(overlay);
+			}
+
+			@Override
+			public void remove(Overlay overlay)
+			{
+				overlayManager.remove(overlay);
+			}
+		};
 	}
 }

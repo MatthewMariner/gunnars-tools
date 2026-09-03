@@ -32,7 +32,7 @@ public final class AmmoTally
 	/**
 	 * Folds another tally's gains in, but only for item ids this tally has
 	 * already recorded as consumed — see
-	 * {@link NpcAmmoRecord#recordKill(AmmoTally)} for why the filter exists and
+	 * {@link NpcAmmoRecord#recordKill(AmmoTally, int)} for why the filter exists and
 	 * why it is applied here rather than at the meter.
 	 */
 	void addConsumedAndRelevantGains(AmmoTally other)
