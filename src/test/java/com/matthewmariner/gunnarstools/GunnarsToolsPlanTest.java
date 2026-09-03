@@ -1,6 +1,8 @@
 package com.matthewmariner.gunnarstools;
 
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 import net.runelite.api.Item;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.gameval.InventoryID;
@@ -9,6 +11,7 @@ import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -241,6 +244,44 @@ public class GunnarsToolsPlanTest
 		assertEquals("the skeletons' own record counts them, and prices nothing",
 			8, plugin.getLedger().get(SKELETON).getUnattributedDeaths());
 		assertEquals(Long.valueOf(400L), plugin.getWithdrawals().get(ARROW));
+	}
+
+	@Test
+	public void aTickWithNoKillInItLeavesTheCachedPlanObjectsWhereTheyWere()
+	{
+		// The guard that only rebuilds on a kill is a performance one, and a
+		// performance guard is invisible to a test that only reads values: rebuild
+		// unconditionally and the numbers come out identical, sixty times a minute,
+		// having sorted every sample series to get there. So what is asserted is
+		// the identity of the cached objects — a rebuild replaces them, and nothing
+		// short of a kill is allowed to.
+		GunnarsToolsPlugin plugin = plugin();
+		config.withTripKills(100).withSafetyMargin(0);
+		FoughtNpc target = npc(40, SPINDEL, "Spindel");
+
+		plugin.getAttribution().interacting(target);
+		plugin.tickEnded(AmmoDelta.EMPTY);
+		plugin.getAttribution().damagedByMe(target);
+		plugin.getAttribution().npcDied(target);
+		assertTrue(plugin.tickEnded(spent(ARROW, 20)));
+
+		final List<TripPlan> planned = plugin.getPlan();
+		final Map<Integer, Long> withdrawals = plugin.getWithdrawals();
+		assertEquals(Long.valueOf(2000L), withdrawals.get(ARROW));
+
+		// A second fight that produces an unattributed death and nothing else —
+		// the shape the comment at the guard names as not worth a rebuild.
+		FoughtNpc next = npc(41, SPINDEL, "Spindel");
+		FoughtNpc bystander = npc(42, SPINDEL, "Spindel");
+		plugin.getAttribution().interacting(next);
+		plugin.tickEnded(AmmoDelta.EMPTY);
+		plugin.getAttribution().damagedByMe(next);
+		plugin.getAttribution().damagedByMe(bystander);
+		plugin.getAttribution().npcDied(bystander);
+		assertFalse(plugin.tickEnded(spent(ARROW, 4)));
+
+		assertSame("the plan was not rebuilt", planned, plugin.getPlan());
+		assertSame("nor was the bank lookup", withdrawals, plugin.getWithdrawals());
 	}
 
 	@Test

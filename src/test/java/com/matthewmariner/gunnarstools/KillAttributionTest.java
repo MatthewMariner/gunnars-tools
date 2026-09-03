@@ -983,6 +983,81 @@ public class KillAttributionTest
 			0, attribution.getWalkedAwayCount());
 	}
 
+	@Test
+	public void aWalkedAwayIndexIsForgottenWhenTheMonsterItselfDies()
+	{
+		// The mark is dropped by the death as well as by the despawn, and this is
+		// the half nothing covered. Both events drop it because the class does not
+		// get to assume one arrives before the other; left standing, the mark
+		// silently exempts whatever takes slot 40 next from ever being counted as a
+		// co-victim, and an exemption lowers the denominator, which is the
+		// direction that ends a trip early.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc walkedAwayFrom = spider(40);
+		FoughtNpc target = spider(41);
+
+		attribution.interacting(walkedAwayFrom);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(walkedAwayFrom);
+		attribution.tickEnded(spent(ARROW, 3));
+
+		attribution.interacting(target);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(target);
+		assertEquals("the mark has to be there before dropping it means anything",
+			1, attribution.getWalkedAwayCount());
+
+		// Somebody else finishes the abandoned one off, and no despawn arrives on
+		// the same tick — the corpse stays in the scene for a while yet.
+		attribution.npcDied(walkedAwayFrom);
+		attribution.tickEnded(spent(ARROW, 2));
+		assertEquals("the mark belongs to a monster that is now dead",
+			0, attribution.getWalkedAwayCount());
+
+		// Slot 40 later holds a different spider, which this window really does
+		// kill and which must be counted like any other co-victim.
+		FoughtNpc newcomer = spider(40);
+		attribution.damagedByMe(newcomer);
+		attribution.npcDied(newcomer);
+		attribution.tickEnded(spent(ARROW, 4));
+
+		assertEquals("index 40 is a different spider now", 1, attribution.getWindowCoVictims());
+	}
+
+	// --- what opens a window when none is open --------------------------------
+
+	@Test
+	public void anExplicitClickBeatsASplashHitsplatOnTheSameTick()
+	{
+		// A hitsplat may open a window, but only when nothing else has claimed one
+		// this tick. The player clicked this spider; the tail of the previous cast
+		// landed on that one. Letting the hitsplat win would hand the whole of the
+		// next fight's ammunition to a monster the player never attacked again —
+		// and on a cross-id spawn, to the wrong record entirely.
+		//
+		// Reachable exactly when no window is open: the first action after a kill,
+		// or the plugin being switched on mid-fight.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc clicked = spider(40);
+		FoughtNpc splashed = spider(41);
+
+		attribution.interacting(clicked);
+		attribution.damagedByMe(splashed);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+
+		assertSame("the monster the player chose owns the window",
+			clicked, attribution.getOwner());
+
+		attribution.damagedByMe(clicked);
+		attribution.npcDied(clicked);
+		List<Attribution> out = attribution.tickEnded(spent(ARROW, 4));
+
+		assertEquals(1, out.size());
+		assertEquals(Attribution.Kind.KILL, out.get(0).getKind());
+		assertEquals("and the fight's ammunition is on it", 4L,
+			out.get(0).getTally().consumedOf(ARROW));
+	}
+
 	// --- reset ---------------------------------------------------------------
 
 	@Test
