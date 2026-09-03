@@ -61,7 +61,8 @@ never fought, live Slayer task reading, and anything that survives a restart.
 ### What you see
 
 The panel appears once you have killed something, and is about whatever you
-killed last. It is at most six lines:
+killed last. In the case it is built for — one ammunition type, no area damage —
+it is six lines:
 
 ```
 Spindel
@@ -71,6 +72,14 @@ Rune arrow                  2,750
   spread              24/25/26/40
   at 90th pct               2,860
 ```
+
+Six is the common case rather than a ceiling, and this file used to call it one.
+The cap is on items, not lines: three at most. Each extra item adds two lines,
+a third under area damage, and a fourth when it was spent on only some of the
+kills. The two-item looting-bag record is nine lines, three items under area
+damage is fourteen, and fifteen is the most the panel can produce. It is not
+trimmed to a line budget, because every line past the first two is a disclosure
+and hiding one hides a shortfall.
 
 `spread` is the cheapest kill, the median, the ninetieth percentile and the
 dearest, in that order. Four numbers close together mean a monster that costs
@@ -153,11 +162,16 @@ by tests, and by the mutation that puts each of them back.
 `net.runelite.client.ui.overlay.WidgetItemOverlay` with `showOnBank()`. The base
 class asks `OverlayManager.getWidgetItems()` for the items currently laid out and
 calls `renderItemOverlay` once per visible one, already clipped to the container;
-`showOnBank()` is a `drawAfterLayer` on the two bank item layers. Three plugins
-shipped with the client do exactly this — `ItemIdentificationOverlay` (which
-pairs `showOnInventory()` with `showOnBank()`, the closest match),
-`InventoryTagsOverlay` and `ItemChargeOverlay`. All of that was read out of the
-pinned 1.12.38 client jar with `javap` rather than remembered.
+`showOnBank()` is a `drawAfterLayer` on the two bank item layers. Exactly two
+plugins shipped with the client call it: `ItemIdentificationOverlay`, which
+pairs it with `showOnInventory()` and `showOnInterfaces()`, and
+`RunepouchOverlay`, which pairs it with `showOnInventory()` alone — the closest
+match to this. All of that was read out of the pinned 1.12.38 client jar with
+`javap` rather than remembered, and the list is what a review caught: it
+previously named `InventoryTagsOverlay` and `ItemChargeOverlay`, neither of
+which draws on the bank. A claim that cites its own method of verification is
+worse than an unsourced one when the claim is wrong, so the scan was redone
+across every class in the jar rather than the three that were remembered.
 
 Nothing in it touches a menu entry, a click zone or a hidden component, so none
 of `AGENTS.md`'s interface or menu restrictions apply: it draws a number over an
@@ -208,19 +222,19 @@ Written down rather than rounded off.
   — both charged to that monster's record, neither one a shot fired. This is a
   larger source of contamination than several of the limitations already
   listed here.
-- **Area attacks still under-count kills; the cost per monster is now corrected
-  for it, and `consumedPerKill` still is not.** When a spell damages four
-  monsters and three die, one window cannot be split four ways without
-  inventing the split, so those deaths are counted separately as
+- **Area attacks still under-count kills; the cost per monster is corrected for
+  it and the cost per attributed kill deliberately is not.** When a spell
+  damages four monsters and three die, one window cannot be split four ways
+  without inventing the split, so those deaths are counted separately as
   "unattributed" and the whole window's ammunition is charged to the fourth.
-  `consumedPerKill` is therefore cost per *attributed* kill — four barrages of
-  four runes, each killing three monsters **of the one id the trip is for**
-  (a different species in the blast is not a divisor; see above), is 16 runes
-  over 12 monsters, a true
-  1.333 each, and `consumedPerKill` reports 4.0. `consumedPerMonster` and every
-  figure the trip projection multiplies now divide by the co-victim-corrected
-  count and report 1.333. Both are published and both are labelled; the panel
-  shows the second and names the first when they differ.
+  `getPerAttributedKill` is therefore cost per kill the plugin could *price* —
+  four barrages of four runes, each killing three monsters **of the one id the
+  trip is for** (a different species in the blast is not a divisor; see above),
+  is 16 runes over 12 monsters, a true 1.333 each, and `getPerAttributedKill`
+  reports 4.0. `getPerMonster` and every figure the trip projection multiplies
+  divide by the co-victim-corrected count and report 1.333. Both are published
+  and both are labelled; the panel shows the second and names the first when
+  they differ.
 - **A monster of the same id you damaged and never abandoned, which somebody
   else finishes while you are mid-fight elsewhere, is counted as a co-victim.**
   It is indistinguishable from one caught by your splash damage — both are a
@@ -239,10 +253,22 @@ Written down rather than rounded off.
   produces a despawn and no death, and lands in the "abandoned" column instead
   of the kill count. That column doubles as the detector: a monster with many
   abandoned fights and few kills is the symptom.
-- **Switching targets mid-tick charges one attack to the wrong monster.**
-  Interaction changes are applied after deaths resolve, which costs one shot at
-  each switch and saves a whole kill when the previous target dies on the same
-  tick. On a Slayer task the two monsters share an id and the error is zero.
+- **Switching targets mid-tick costs one shot out of the average, and this file
+  used to say it cost nothing.** Interaction changes are applied after deaths
+  resolve, which saves a whole kill when the previous target dies on the same
+  tick and charges one shot to the previous target at every switch. The old
+  claim was that on a Slayer task the two monsters share an id and the error is
+  zero. Sharing an id is not enough: the previous target's window closes as
+  *abandoned*, and the abandoned column is kept out of the per-kill mean on
+  purpose, so the shot lands in the right record and the wrong column. Twenty
+  arrows fired at a spider, one of them on the switch tick, is measured as
+  nineteen. A shot fired on the tick *after* a kill — you have clicked the next
+  monster and no window is open yet — is worse: it is discarded outright and
+  appears in no column at all, which is the one exception to the promise
+  `Attribution` makes in its own javadoc. Both understate by one shot per
+  switch, both are pinned by tests, and both hinge on the tick-ordering question
+  now last in "wanted from a real client" — if the decrement lands a tick later
+  than the click, neither happens.
 - **Everything is still in memory, and the session is the sample.** Nothing is
   written to disk, on purpose: a plugin that writes files is reviewed by hand at
   the Plugin Hub instead of automatically. So the confidence word resets to `no
@@ -271,8 +297,19 @@ Reasoned from the API, not yet observed in game:
 - that `showOnBank()` covers the bank layout this account actually sees, and
   that the withdraw quantity lands somewhere legible over the item icon rather
   than under the stack size the game already draws there;
-- that the panel is legible at the size and position it defaults to, and that
-  six lines is not five too many mid-fight.
+- that the panel is legible at the size and position it defaults to, that six
+  lines is not five too many mid-fight, and that the fourteen a three-item
+  area-damage record produces is still something you would leave switched on;
+- **whether the ammunition decrement for a shot lands on the same game tick as
+  the `InteractingChanged` that switched targets, or on the tick after.** This
+  is the one that decides whether the two leaks in the limitation above exist at
+  all. On the same tick, one shot per switch leaves the per-kill average and a
+  shot fired just after a kill is discarded entirely. A tick later, neither
+  happens and the accounting is already right — which is why the behaviour is
+  pinned by tests rather than "fixed" on a guess. The fix is also not free:
+  applying interaction changes before the tick's consumption closes both leaks
+  and loses a whole kill whenever the previous target dies on the switch tick,
+  which is the trade the current order was chosen for.
 
 ## Development
 
@@ -282,7 +319,7 @@ Reasoned from the API, not yet observed in game:
 ./gradlew run     # launches a full RuneLite dev client with the plugin loaded
 ```
 
-199 tests, all of them runnable with no game client — kill attribution,
+206 tests, all of them runnable with no game client — kill attribution,
 consumption measurement, the estimate and its order statistics, the projection
 and its arithmetic, and both overlays' switches and the colour the bank
 highlight chooses. That is on purpose: the decisions that most easily go
@@ -319,7 +356,37 @@ The eighth is an equivalent mutant and is left standing on purpose: the
 copies, because nothing in that loop writes the field any more. It is there to
 stop the next edit reintroducing the ordering bug the deferred application
 fixes, the comment at that line says exactly that, and no test can be written
-that fails when it is swapped back.
+that fails when it is swapped back. A later independent review re-derived that
+and agreed.
+
+That review ran eight more mutations and probes. Three survived against the
+shipped source and all three became changes: the walked-away mark being dropped
+on a death (only its despawn twin was covered), the half of the hitsplat guard
+that lets an explicit click beat a same-tick splash hitsplat, and the guard that
+only rebuilds the plan on a kill — a performance guard, which a test that asserts
+values cannot see at all, so what is asserted now is the identity of the cached
+list and map. Two more were probes of the opposite tick ordering rather than
+mutations, and they are what settled the target-switch leak above into
+documentation instead of a guess: adopting a pending engagement before the
+tick's consumption closes the post-kill half, and moving the whole interaction
+block ahead of the consumption closes both halves and loses a whole kill.
+
+It also found three public methods with no production caller. `Attribution.kill`
+had a two-argument overload defaulting the co-victim count to zero, and around
+fifty test call sites were using it — so most of the ledger suite was exercising
+the co-victim path with the denominator silently zeroed, which is the same
+standing invitation `NpcAmmoRecord.recordKill` had already refused one layer
+down. `NpcAmmoRecord.consumedPerKill` and `consumedPerMonster` had no caller at
+all. All three are gone: the tests pass the count explicitly now, and read the
+two rates off `ConsumptionEstimate`, which is what the overlays read.
+
+One finding from that pass is worth recording on its own, because it is a shape
+that will recur. **Fixing the co-victim divisor's unit disarmed the guard next
+to it.** The walked-away exclusion had exactly one test, and it used a skeleton
+as the new target; once a skeleton was refused by the id comparison anyway,
+deleting the walked-away book entirely left the suite green. A fix can take
+coverage away as well as add it, and nothing reveals that except re-running the
+neighbouring mutations *after* the fix rather than before.
 
 What still needs a client is small, and is named above.
 

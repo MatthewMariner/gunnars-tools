@@ -23,9 +23,12 @@ import javax.annotation.Nullable;
  *
  * <ul>
  *   <li>{@link #getConsumed()} and {@link #getKills()} are the measurement:
- *       gross quantity spent, over the number of kills it was spent on.
- *       {@link #consumedPerKill(int)} is their quotient and is the number the
- *       later milestones exist to multiply.</li>
+ *       gross quantity spent, over the number of kills it was spent on. Their
+ *       quotient is the number the later milestones exist to multiply, and it is
+ *       published by {@link #estimate(int)} rather than by a getter here — see
+ *       {@link ConsumptionEstimate#getPerAttributedKill()} and
+ *       {@link ConsumptionEstimate#getPerMonster()}, which carry the sample
+ *       count and the denominator along with the figure.</li>
  *   <li>{@link #getRecovered()} is every gain of an item the player also spends
  *       on this monster. It is <b>never subtracted</b> from the consumed
  *       column — see {@link AmmoDelta} for the argument, which comes down to a
@@ -36,13 +39,17 @@ import javax.annotation.Nullable;
  *       that did not end in an observed kill, with {@link #getAbandonedFights()}
  *       counting them. Kept out of the average entirely.</li>
  *   <li>{@link #getUnattributedDeaths()} counts kills that were real but could
- *       not be priced — the other targets of an area attack. {@link
- *       #consumedPerKill(int)} is cost per <em>attributed</em> kill, not per
- *       monster killed, and a record with many of these understates both:
- *       the whole window's ammunition is charged to whichever one death got
- *       priced, so the true per-monster cost is {@code consumed / (kills +
- *       unattributedDeaths)}, lower than what {@link #consumedPerKill(int)}
- *       alone reports.</li>
+ *       not be priced — the other targets of an area attack, and anything that
+ *       died outside a window this record paid for. It is a disclosure, not a
+ *       denominator. <b>The true per-monster cost is not
+ *       {@code consumed / (kills + unattributedDeaths)}</b>, which is what an
+ *       earlier draft of this javadoc asserted as fact and which the README, the
+ *       commit that introduced the correction and {@link ConsumptionEstimate}
+ *       all now say is wrong: that column also holds deaths of monsters this
+ *       record's ammunition never bought, and deaths of monsters that are not
+ *       even this record's species, so dividing by it understates.
+ *       {@link #getMonstersPriced()} is the denominator, and
+ *       {@link ConsumptionEstimate} is where the reasoning lives.</li>
  * </ul>
  *
  * <p>Gains are only recorded for item ids that appear in the consumed column,
@@ -66,8 +73,8 @@ import javax.annotation.Nullable;
  * would raise the mean of what is left. And an item first seen on the fiftieth
  * kill is backfilled with forty-nine zeros, because forty-nine kills really did
  * cost none of it; the alternative is a series of length one sitting next to a
- * kill count of fifty, and a mean that disagrees with
- * {@link #consumedPerKill(int)} by a factor of fifty.
+ * kill count of fifty, and a mean that disagrees with this record's own
+ * consumed-over-kills by a factor of fifty.
  *
  * <p>The memory is one {@code long} per kill per item id, for the session. A
  * long Wilderness trip is a few hundred kills against two or three ids: tens of
@@ -221,21 +228,6 @@ public final class NpcAmmoRecord
 	}
 
 	/**
-	 * @return gross quantity of this item per kill, or 0 when there are no
-	 * samples. Deliberately not rounded and deliberately not clamped: a caller
-	 * that wants "arrows to bring" has to decide for itself how to round, and
-	 * rounding here would hide a figure of 0.4 behind a 0.
-	 */
-	public double consumedPerKill(int itemId)
-	{
-		if (kills == 0)
-		{
-			return 0.0d;
-		}
-		return (double) lifetime.consumedOf(itemId) / kills;
-	}
-
-	/**
 	 * @return other monsters of this id killed by the windows this record priced.
 	 * Zero for every single-target trip there is, and zero for area damage that
 	 * only ever caught something else.
@@ -254,21 +246,6 @@ public final class NpcAmmoRecord
 	public int getMonstersPriced()
 	{
 		return kills + pricedCoVictims;
-	}
-
-	/**
-	 * @return gross quantity of this item per monster killed, or 0 with no
-	 * samples. Identical to {@link #consumedPerKill(int)} whenever nothing died to
-	 * splash damage.
-	 */
-	public double consumedPerMonster(int itemId)
-	{
-		final int monsters = getMonstersPriced();
-		if (monsters == 0)
-		{
-			return 0.0d;
-		}
-		return (double) lifetime.consumedOf(itemId) / monsters;
 	}
 
 	/**

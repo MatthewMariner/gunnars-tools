@@ -74,12 +74,12 @@ public class GunnarsToolsPlanTest
 		GunnarsToolsPlugin plugin = plugin();
 		config.withTripKills(100).withSafetyMargin(0);
 
-		plugin.getLedger().apply(Attribution.kill(npc(40, SPINDEL, "Spindel"), spent(20)));
+		plugin.getLedger().apply(Attribution.kill(npc(40, SPINDEL, "Spindel"), spent(20), 0));
 		plugin.rebuildPlan();
 		assertEquals(SPINDEL, plugin.getPlanSubject().getNpcId());
 		assertEquals(Long.valueOf(2000L), plugin.getWithdrawals().get(ARROW));
 
-		plugin.getLedger().apply(Attribution.kill(npc(41, CALLISTO, "Callisto"), spent(45)));
+		plugin.getLedger().apply(Attribution.kill(npc(41, CALLISTO, "Callisto"), spent(45), 0));
 		plugin.rebuildPlan();
 
 		assertEquals(CALLISTO, plugin.getPlanSubject().getNpcId());
@@ -92,7 +92,7 @@ public class GunnarsToolsPlanTest
 		GunnarsToolsPlugin plugin = plugin();
 		config.withTripKills(250).withSafetyMargin(20);
 
-		plugin.getLedger().apply(Attribution.kill(npc(40, SPINDEL, "Spindel"), spent(20)));
+		plugin.getLedger().apply(Attribution.kill(npc(40, SPINDEL, "Spindel"), spent(20), 0));
 		plugin.rebuildPlan();
 
 		assertEquals(1, plugin.getPlan().size());
@@ -107,7 +107,7 @@ public class GunnarsToolsPlanTest
 		GunnarsToolsPlugin plugin = plugin();
 		config.withTripKills(100).withSafetyMargin(0);
 
-		plugin.getLedger().apply(Attribution.kill(npc(40, SPINDEL, "Spindel"), spent(20)));
+		plugin.getLedger().apply(Attribution.kill(npc(40, SPINDEL, "Spindel"), spent(20), 0));
 		plugin.rebuildPlan();
 		assertEquals(2000L, plugin.getPlan().get(0).getBring());
 
@@ -125,7 +125,7 @@ public class GunnarsToolsPlanTest
 		GunnarsToolsPlugin plugin = plugin();
 		config.withTripKills(100).withSafetyMargin(0);
 
-		plugin.getLedger().apply(Attribution.kill(npc(40, SPINDEL, "Spindel"), spent(20)));
+		plugin.getLedger().apply(Attribution.kill(npc(40, SPINDEL, "Spindel"), spent(20), 0));
 		plugin.rebuildPlan();
 
 		config.withTripKills(300);
@@ -320,7 +320,7 @@ public class GunnarsToolsPlanTest
 	{
 		GunnarsToolsPlugin plugin = plugin();
 		config.withTripKills(100).withSafetyMargin(0);
-		plugin.getLedger().apply(Attribution.kill(npc(40, SPINDEL, "Spindel"), spent(20)));
+		plugin.getLedger().apply(Attribution.kill(npc(40, SPINDEL, "Spindel"), spent(20), 0));
 		plugin.rebuildPlan();
 
 		try

@@ -25,11 +25,14 @@ import net.runelite.client.util.QuantityFormatter;
  * {@code drawAfterLayer} on the two bank item layers, so the drawing lands above
  * the icon and below nothing that matters.
  *
- * <p>Three plugins shipped with the client do the same thing the same way —
- * {@code ItemIdentificationOverlay} (which calls {@code showOnInventory()} and
- * {@code showOnBank()} together, the closest match to this), {@code
- * InventoryTagsOverlay} and {@code ItemChargeOverlay}. Verified against the
- * pinned 1.12.38 client jar rather than remembered.
+ * <p>Exactly two plugins shipped with the client call {@code showOnBank()}:
+ * {@code ItemIdentificationOverlay}, which pairs it with
+ * {@code showOnInventory()} and {@code showOnInterfaces()}, and
+ * {@code RunepouchOverlay}, which pairs it with {@code showOnInventory()} alone
+ * — the closest match to this one. Every class in the pinned 1.12.38 client jar
+ * was scanned for the call rather than remembered; an earlier version of this
+ * note listed {@code InventoryTagsOverlay} and {@code ItemChargeOverlay}
+ * instead, and neither of them draws on the bank at all.
  *
  * <p>Nothing here touches a menu entry, a click zone or a hidden component, so
  * none of {@code AGENTS.md}'s interface or menu restrictions are in play: it
@@ -73,6 +76,15 @@ class BankWithdrawalOverlay extends WidgetItemOverlay
 
 		final Map<Integer, Long> withdrawals = plugin.getWithdrawals();
 		final Long needed = withdrawals.get(itemId);
+
+		// The null is the ordinary case: most of what is on screen at a bank is not
+		// in the plan. The second half is unreachable today and is a guard rather
+		// than a branch — TripPlanner.plan already drops every line whose quantity
+		// came out at zero, so nothing that reaches this map can be one. It stays
+		// because a highlight promising "withdraw 0" is worse than no highlight,
+		// and this is the last place that promise can be kept if a later milestone
+		// builds the lookup some other way. There is deliberately no test for it;
+		// a test would have to reach past TripPlanner to construct the state.
 		if (needed == null || needed <= 0L)
 		{
 			return;

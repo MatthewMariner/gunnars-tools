@@ -46,8 +46,8 @@ public class TripPlannerTest
 	private static NpcAmmoRecord twoKillsOfEach()
 	{
 		AmmoLedger ledger = new AmmoLedger();
-		ledger.apply(Attribution.kill(spindel(40), window(spent(ARROW, 25L, BLOOD_RUNE, 4L))));
-		ledger.apply(Attribution.kill(spindel(41), window(spent(ARROW, 25L, BLOOD_RUNE, 4L))));
+		ledger.apply(Attribution.kill(spindel(40), window(spent(ARROW, 25L, BLOOD_RUNE, 4L)), 0));
+		ledger.apply(Attribution.kill(spindel(41), window(spent(ARROW, 25L, BLOOD_RUNE, 4L)), 0));
 		return ledger.get(SPINDEL);
 	}
 
@@ -71,8 +71,8 @@ public class TripPlannerTest
 		// Dropping the line would be dropping a shortfall, so the honest signal is
 		// published beside it instead: spent on one of two kills.
 		AmmoLedger ledger = new AmmoLedger();
-		ledger.apply(Attribution.kill(spindel(40), window(spent(ARROW, 25L, COINS, 5000L))));
-		ledger.apply(Attribution.kill(spindel(41), window(spent(ARROW, 25L))));
+		ledger.apply(Attribution.kill(spindel(40), window(spent(ARROW, 25L, COINS, 5000L)), 0));
+		ledger.apply(Attribution.kill(spindel(41), window(spent(ARROW, 25L)), 0));
 
 		List<TripPlan> plans = TripPlanner.plan(ledger.get(SPINDEL), 100, 0);
 

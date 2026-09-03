@@ -9,6 +9,16 @@ import javax.annotation.Nullable;
  * throwing them away silently is how a measurement tool starts lying. Every
  * arrow the player fires is either attributed to a kill, or accounted for
  * somewhere a reader can see it.
+ *
+ * <p><b>With one exception, named here rather than left to be discovered.</b> A
+ * shot that leaves on the tick the player clicks a new monster while no window
+ * is open — the tick after a kill — is discarded by {@link KillAttribution}
+ * rather than filed under any of the three: the tick's consumption is charged
+ * before the click becomes an engagement, and a delta with no owner is dropped.
+ * It is one shot per target switch, it understates, and whether it happens at
+ * all depends on a tick-ordering question that needs a running client to
+ * settle. See {@link KillAttribution} on the two costs of applying interaction
+ * changes last, and the README's "wanted from a real client".
  */
 public final class Attribution
 {
@@ -61,13 +71,16 @@ public final class Attribution
 		this.coVictims = coVictims;
 	}
 
-	/** A kill whose window killed nothing but the monster it is filed against. */
-	static Attribution kill(FoughtNpc npc, AmmoTally tally)
-	{
-		return kill(npc, tally, 0);
-	}
-
 	/**
+	 * There is deliberately no two-argument overload defaulting {@code coVictims}
+	 * to zero. It had no production caller and around fifty test call sites, which
+	 * is the worst possible distribution: every one of those tests was exercising
+	 * the co-victim path with the denominator silently zeroed, so the suite would
+	 * have gone on passing with the count wired to nothing. The same standing
+	 * invitation was closed one layer down at
+	 * {@link NpcAmmoRecord#recordKill(AmmoTally, int)} for the same reason, and
+	 * closing it there while leaving it open here defended nothing.
+	 *
 	 * @param coVictims how many <em>other monsters of this same id</em> died
 	 *                  inside the window this kill closes. The id is half the
 	 *                  definition: the count is a divisor under this record's

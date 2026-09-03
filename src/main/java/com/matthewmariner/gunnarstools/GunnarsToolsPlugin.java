@@ -102,11 +102,37 @@ public class GunnarsToolsPlugin extends Plugin
 	 * The plan the two overlays draw, recomputed when a kill or a config change
 	 * makes it stale and never in a render loop.
 	 *
-	 * <p>Written and read on the client thread — game ticks, config events and
-	 * overlay rendering all run there — so there is nothing to synchronise. It is
-	 * cached rather than derived on demand because {@code AGENTS.md} is explicit
-	 * that per-frame work stays minimal, and building a plan sorts a sample array
-	 * per item.
+	 * <p>Cached rather than derived on demand because {@code AGENTS.md} is
+	 * explicit that per-frame work stays minimal, and building a plan sorts a
+	 * sample array per item.
+	 *
+	 * <h2>Two threads write these three fields, not one</h2>
+	 *
+	 * <p>This comment used to say that game ticks, config events and overlay
+	 * rendering all run on the client thread, so there was nothing to
+	 * synchronise. Ticks and rendering do. Config events do not:
+	 * {@code ConfigManager.setConfiguration} posts {@code ConfigChanged} on the
+	 * event bus synchronously, on whichever thread called it, and for the settings
+	 * panel that thread is the Swing EDT. So {@link #onConfigChanged} writes these
+	 * fields from the EDT while the two overlays read them from the client thread,
+	 * with no lock and nothing volatile.
+	 *
+	 * <p>It is still safe, and the real reason is worth stating in place of the
+	 * wrong one. {@link #plan} and {@link #withdrawals} are only ever assigned
+	 * freshly built collections already wrapped by {@link Collections}'
+	 * unmodifiable views, whose reference to what they wrap is a final field — so
+	 * a thread that sees the new wrapper is guaranteed by JLS 17.5 to see
+	 * everything that was reachable from it when its constructor finished. A
+	 * thread that has not seen the write yet draws the previous plan for a frame
+	 * or two, which is indistinguishable from ordinary latency. {@link
+	 * #planSubject} carries no such guarantee and needs none: it is only ever
+	 * pointed at a record the client thread built and mutates, and the EDT can
+	 * only re-point it at one that thread already has.
+	 *
+	 * <p>The safety is therefore real but incidental — it falls out of the
+	 * unmodifiable wrappers, which are there so an overlay cannot edit the plan.
+	 * Anything later that assigns a bare {@code ArrayList} here, or that mutates a
+	 * published plan in place, loses it without a compiler or a test saying so.
 	 */
 	private List<TripPlan> plan = Collections.emptyList();
 	private Map<Integer, Long> withdrawals = Collections.emptyMap();
@@ -244,6 +270,9 @@ public class GunnarsToolsPlugin extends Plugin
 	 * <p>Filtered to this plugin's own group. RuneLite posts every plugin's config
 	 * changes on the same bus, and rebuilding on all of them would be a sort per
 	 * keystroke in somebody else's settings panel.
+	 *
+	 * <p>This handler runs on the Swing EDT rather than the client thread — see
+	 * the field it writes for what that does and does not cost.
 	 */
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)

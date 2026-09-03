@@ -52,7 +52,7 @@ public class OverlaySwitchTest
 		AmmoTally window = new AmmoTally();
 		window.add(new AmmoDelta(Collections.singletonMap(ARROW, 20L), Collections.emptyMap()));
 		plugin.getLedger().apply(Attribution.kill(
-			new FoughtNpc(40, SPINDEL, "Spindel", new int[]{130, 130, 130, 200, 1, 130}), window));
+			new FoughtNpc(40, SPINDEL, "Spindel", new int[]{130, 130, 130, 200, 1, 130}), window, 0));
 		plugin.rebuildPlan();
 
 		return plugin;

@@ -18,7 +18,19 @@ import net.runelite.client.ui.overlay.components.TitleComponent;
  *
  * <p>Deliberately small. This is a utility with one question to answer, and a
  * panel that grows a row per column of the record would be a dashboard nobody
- * reads mid-fight. Three items at most, two lines each, and the header.
+ * reads mid-fight. Three items at most, and the case it is built for — one
+ * ammunition type, no area damage — is six lines including the header.
+ *
+ * <p><b>Six is the common case, not the ceiling, and this javadoc used to claim
+ * otherwise.</b> Two lines an item is the floor: area damage adds a third to
+ * every item, an item spent on only some of the kills adds a fourth saying so,
+ * and the spread and the ninetieth-percentile total add one each to the first
+ * item. Replaying the predicates below, the two-item looting-bag record is nine
+ * lines, three items under area damage is fourteen, and fifteen is the most they
+ * can produce. The cap that is actually enforced is {@link #MAX_ITEM_LINES},
+ * which counts items rather than lines — because every line past the first two
+ * is a disclosure, and trimming a disclosure to hit a line budget is what
+ * {@link TripPlanner}'s javadoc refuses on the same grounds.
  *
  * <p>It decides nothing. Every number on it comes off a {@link TripPlan} that
  * was computed once, at the kill that produced it or at the config change that

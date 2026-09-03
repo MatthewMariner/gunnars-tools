@@ -472,6 +472,112 @@ public class KillAttributionTest
 		assertSame("and the next fight is already under way", next, attribution.getOwner());
 	}
 
+	// --- what a target switch costs, pinned rather than claimed away ----------
+
+	@Test
+	public void theShotFiredOnASwitchTickLeavesThePerKillAverageEvenOnASlayerTask()
+	{
+		// Interaction changes are applied after deaths resolve, and the price of
+		// that is one attack at each switch. This javadoc used to claim the price
+		// was zero on a Slayer task because the two monsters share an id. Sharing
+		// an id is not enough, and this is the case that shows it: the shot lands
+		// in the previous target's window, which closes as ABANDONED, and the
+		// abandoned column is kept out of the per-kill average on purpose. Same
+		// record, wrong column.
+		//
+		// Twenty arrows are fired at the second spider. Nineteen of them are what
+		// the kill reports.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc first = spider(40);
+		FoughtNpc second = spider(41);
+
+		attribution.interacting(first);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(first);
+		attribution.tickEnded(spent(ARROW, 5));
+
+		// The switch tick: the player clicks the second spider and the game fires
+		// at it before the tick closes.
+		attribution.interacting(second);
+		List<Attribution> switchTick = attribution.tickEnded(spent(ARROW, 1));
+
+		assertEquals(1, switchTick.size());
+		assertEquals(Attribution.Kind.ABANDONED, switchTick.get(0).getKind());
+		assertEquals("the shot aimed at the second spider is banked against the first",
+			6L, switchTick.get(0).getTally().consumedOf(ARROW));
+
+		attribution.damagedByMe(second);
+		attribution.tickEnded(spent(ARROW, 19));
+		attribution.npcDied(second);
+		List<Attribution> out = attribution.tickEnded(AmmoDelta.EMPTY);
+
+		assertEquals(Attribution.Kind.KILL, out.get(0).getKind());
+		assertEquals("twenty arrows killed it and the sample says nineteen",
+			19L, out.get(0).getTally().consumedOf(ARROW));
+	}
+
+	@Test
+	public void theShotFiredOnAPostKillClickTickIsDiscardedRatherThanBanked()
+	{
+		// The worse half of the same ordering, and the one place this class breaks
+		// the promise Attribution's javadoc makes. The window closed with the last
+		// kill, so a shot that leaves on the tick the player clicks the next
+		// monster arrives with no owner: consumption is applied before the pending
+		// engagement becomes one, and a delta with no owner is dropped. It is not
+		// attributed, not abandoned, not an unattributed death — it is gone.
+		//
+		// Twenty-four arrows leave the containers across this sequence. Every
+		// verdict the class produces is collected, and they account for
+		// twenty-three.
+		KillAttribution attribution = new KillAttribution();
+		FoughtNpc first = spider(40);
+		FoughtNpc second = spider(41);
+
+		long fired = 0L;
+		long accounted = 0L;
+
+		attribution.interacting(first);
+		attribution.tickEnded(AmmoDelta.EMPTY);
+		attribution.damagedByMe(first);
+		attribution.npcDied(first);
+		fired += 4L;
+		accounted += consumed(attribution.tickEnded(spent(ARROW, 4)));
+
+		assertNull("the window closed with the kill", attribution.getOwner());
+
+		// The click tick, with one arrow leaving on it.
+		attribution.interacting(second);
+		fired += 1L;
+		List<Attribution> clickTick = attribution.tickEnded(spent(ARROW, 1));
+		assertTrue("no verdict of any kind: " + clickTick, clickTick.isEmpty());
+		accounted += consumed(clickTick);
+
+		attribution.damagedByMe(second);
+		fired += 19L;
+		accounted += consumed(attribution.tickEnded(spent(ARROW, 19)));
+
+		attribution.npcDied(second);
+		accounted += consumed(attribution.tickEnded(AmmoDelta.EMPTY));
+
+		assertEquals(24L, fired);
+		assertEquals("one arrow is in no column the plugin publishes",
+			23L, accounted);
+	}
+
+	/** Every arrow the given verdicts account for, in any of the three columns. */
+	private static long consumed(List<Attribution> verdicts)
+	{
+		long total = 0L;
+		for (Attribution verdict : verdicts)
+		{
+			if (verdict.getTally() != null)
+			{
+				total += verdict.getTally().consumedOf(ARROW);
+			}
+		}
+		return total;
+	}
+
 	// --- the window has to have an owner --------------------------------------
 
 	@Test

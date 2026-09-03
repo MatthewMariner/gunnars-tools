@@ -167,10 +167,34 @@ import javax.annotation.Nullable;
  * <p>The price of applying interaction changes last is one attack's worth of
  * ammunition at each target switch: if the player clicks a new monster and the
  * game fires at it on that same tick, that shot is charged to the previous
- * target. It is one shot, only at a switch, and in the case this plugin is
- * built for — a slayer task, the same monster over and over — the two monsters
- * share an id and the error is exactly zero. The alternative ordering loses a
- * whole kill instead of one shot, which is the worse trade.
+ * target. The alternative ordering loses a whole kill instead of one shot, which
+ * is the worse trade — reverse the two blocks and
+ * {@code clickingTheNextMonsterOnTheTickTheLastOneDiesStillCreditsTheKill} goes
+ * red.
+ *
+ * <p><b>That shot leaves the average, and an earlier version of this javadoc
+ * said it did not.</b> The claim was that on a Slayer task the two monsters
+ * share an id, so the error is exactly zero. Sharing an id is not enough. The
+ * previous target's window closes as {@link Attribution.Kind#ABANDONED}, and the
+ * abandoned column is deliberately kept out of the per-kill mean, so the shot
+ * ends up in the right record and the wrong column. Twenty arrows fired at a
+ * spider, one of them on the switch tick, is measured as nineteen.
+ *
+ * <p>There is a second case, on the tick <em>after</em> a kill, and it is worse.
+ * The window closed with that kill, so a shot leaving on the tick the player
+ * clicks the next monster arrives with no owner — consumption is charged before
+ * the pending engagement becomes one — and a delta with no owner is discarded.
+ * Not attributed, not abandoned, not an unattributed death. That is the one
+ * place this class breaks the promise {@link Attribution}'s javadoc makes, and
+ * it is named there too rather than left to be found.
+ *
+ * <p>Both are one shot per target switch, both understate, and both rest on
+ * something no offline test can settle: whether the container decrement for a
+ * shot really does land on the same tick as the {@code InteractingChanged} that
+ * switched targets. If it lands a tick later, neither leak exists and a fix
+ * would be inventing an entry for a shot that was never misfiled. So the
+ * behaviour is pinned by tests rather than changed, and the question is on the
+ * README's list of what is wanted from a real client.
  *
  * <h2>Engagement is sticky</h2>
  *

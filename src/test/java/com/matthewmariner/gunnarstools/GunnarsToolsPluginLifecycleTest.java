@@ -87,7 +87,7 @@ public class GunnarsToolsPluginLifecycleTest
 		GunnarsToolsPlugin plugin = plugin();
 		plugin.startUp();
 
-		plugin.getLedger().apply(Attribution.kill(spindel(40), spent(30)));
+		plugin.getLedger().apply(Attribution.kill(spindel(40), spent(30), 0));
 		assertEquals("the state has to be there before the teardown means anything",
 			1, plugin.getLedger().size());
 
@@ -184,7 +184,7 @@ public class GunnarsToolsPluginLifecycleTest
 		GunnarsToolsPlugin plugin = plugin();
 		plugin.startUp();
 
-		plugin.getLedger().apply(Attribution.kill(spindel(40), spent(30)));
+		plugin.getLedger().apply(Attribution.kill(spindel(40), spent(30), 0));
 		plugin.rebuildPlan();
 
 		assertEquals("the plan has to be there before the teardown means anything",
