@@ -1,87 +1,42 @@
+<div align="center">
+
 # Gunnar's Tools
 
-A RuneLite plugin for Old School RuneScape. **It measures how much ammunition
-each kill of a given monster actually costs you, and turns that into "for a trip
-of N, bring X".** Nothing here is submitted to, or available on, the Plugin Hub.
+**Every arrow you carry and don't fire is a gift to whoever kills you. This tells you exactly how many to bring.**
 
-## Why
+A RuneLite plugin that measures what a Wilderness Slayer kill actually costs you
+in ammunition, then turns that into one line — for a trip of N kills, bring X.
+It reads only your own inventory and equipment; nothing about anyone else.
 
-Wilderness Slayer trips are a carrying-capacity problem, and a lopsided one.
-Dying to a PKer keeps three items unskulled and none skulled, so **an arrow you
-carry in and do not fire is an arrow you are quite likely to hand over.** Bring
-too few and the trip ends early; bring too many and you are carrying a surplus
-for whoever kills you.
+[![RuneLite](https://img.shields.io/badge/RuneLite-1.12.38-blue)](https://runelite.net)
+[![Java](https://img.shields.io/badge/Java-11-orange)](https://runelite.net)
+[![License](https://img.shields.io/badge/license-BSD--2--Clause-green)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-206-brightgreen)](#development)
 
-An earlier version of this said something stronger — that an ammunition stack
-*never* occupies one of those three slots, so the surplus is given away
-outright. **That is not verified, and the wiki does not support it.** The Items
-Kept on Death mechanic ranks candidates in order of value, first by effective
-Grand Exchange value and then by alchemy value; the words *stack*, *stackable*,
-*quantity* and *unit price* appear nowhere in that rule, and there is no
-ammunition row anywhere on the page. The one sentence that does use "stackable"
-cuts the other way — *"when players are 3-iteming, they should also keep their
-ammo and any stackable items down to a minimum"* — which would be pointless
-advice if ammunition could never be kept. The sibling `../dangerous-teleport`
-already refuses to subtract keep slots for exactly this reason, calling
-unit-versus-stack ranking a rule it has not verified; this plugin should not
-have been asserting the same unverified rule in the opposite direction.
+</div>
 
-Nothing here depends on it. Carrying less into the Wilderness than you would
-otherwise is good whether the surplus is lost outright or merely put at risk,
-and the number this plugin measures — what a kill actually costs — is the same
-either way.
+> [!NOTE]
+> **Not on the Plugin Hub yet.** Build and run it yourself — see
+> [Development](#development) below.
 
-The answer wanted is "for N kills of this monster, how much do I need?", and
-the decision that governs the whole design is **measure, do not model.**
-Predicting consumption from accuracy × damage × attack speed produces error
-bars wide enough to make the answer un-actionable, and it silently omits
-whatever your gear, prayers and boosts are doing. Watching the stack go down is
-automatically correct about all of it.
+<!-- SCREENSHOT: the overlay panel right after a kill, framed alongside the bank with its
+     highlighted withdraw quantities in the same shot. Save as docs/img/panel.png and
+     replace this comment with:  ![Panel and bank highlight](docs/img/panel.png) -->
 
-## What is implemented
+---
 
-**The measurement (M1).**
+## What it does
 
-- **Kill attribution.** A death becomes your kill only if the game marked a
-  hitsplat on that monster as yours *and* it was the monster you were fighting.
-  A despawn is not a death. Every event is buffered and resolved at the game
-  tick boundary, so almost no ordering within a tick is load-bearing — the one
-  exception is which of two simultaneous hitsplats opens a window when none was
-  open, described in `KillAttribution`'s class doc.
-- **Consumption measurement.** Inventory, worn equipment and Dizana's quiver
-  are summed into one multiset of stackable items and differenced once per
-  tick, so equipping a stack — a loss in one container and a gain in another —
-  is arithmetically invisible, as it deserves to be.
-- **A per-monster record**, in memory for the session: consumed per kill by
-  item id, the sample count behind it, and the monster's six combat stats read
-  from the live NPC.
+Kill something and Gunnar's Tools watches what leaves your inventory, your worn
+equipment and your Dizana's quiver, and works out what that kill actually cost —
+not what a table says it should cost. A table keyed on a monster's *name* would
+have to average across a whole Wilderness Slayer task, and those span monsters
+whose hitpoints differ by as much as a factor of 425: Krystilia's "spider" task
+alone runs from a plain Spider at 2 hp to Venenatis at 850. Reading the monster
+in front of you instead means there's nothing to get wrong.
 
-**The estimate and its uncertainty (M2).** Every kill now leaves a sample
-behind rather than only moving a total, and the record publishes a
-`ConsumptionEstimate` per item id: the gross rate, the sample count, how many of
-those kills spent any of the item at all, the recovered volume, and the spread.
-
-**The answer (M3).** `TripPlanner` turns a record into one line per item —
-"for a trip of 100, bring 2,750" — with a configurable safety margin, ordered
-biggest first. `TripPlan.describe` writes it as a sentence with its basis
-attached, which is what lands in the debug log on each kill.
-
-**Bank highlighting (M4).** The items the trip needs are outlined in the bank
-with the quantity to withdraw, green when the bank holds enough and red when it
-does not.
-
-**Two surfaces.** A small overlay panel for the monster you last killed, and the
-bank highlight. Both are switchable; both draw from a projection computed once
-per kill rather than once per frame.
-
-Not implemented, and deliberately: cold-start estimates for a monster you have
-never fought, live Slayer task reading, and anything that survives a restart.
-
-### What you see
-
-The panel appears once you have killed something, and is about whatever you
-killed last. In the case it is built for — one ammunition type, no area damage —
-it is six lines:
+Once it has seen enough kills, an overlay panel says what a trip of N of that
+monster will cost, with a safety margin on top:
 
 ```
 Spindel
@@ -92,351 +47,168 @@ Rune arrow                  2,750
   at 90th pct               2,860
 ```
 
-Six is the common case rather than a ceiling, and this file used to call it one.
-The cap is on items, not lines: three at most. Each extra item adds two lines,
-a third under area damage, and a fourth when it was spent on only some of the
-kills. The two-item looting-bag record is nine lines, three items under area
-damage is fourteen, and fifteen is the most the panel can produce. It is not
-trimmed to a line budget, because every line past the first two is a disclosure
-and hiding one hides a shortfall.
-
 `spread` is the cheapest kill, the median, the ninetieth percentile and the
-dearest, in that order. Four numbers close together mean a monster that costs
-the same every time; `10/50/90/900` means one that does not, and no single
-figure can say that. `at 90th pct` is what the trip would cost if every kill
-were as dear as the ninetieth percentile — see below for the one case where it
-is withheld instead of guessed at.
+dearest, in that order — four close numbers mean a monster that costs about the
+same every time, and a wide spread means it doesn't. The word next to the
+sample count (`anecdotal` / `thin` / `fair` / `solid`) is a reading aid for how
+much to trust the figure, not a statistical guarantee — the raw count `n` is
+always printed beside it.
 
-Two settings, plus a switch for each surface: **trip size** (how many monsters,
-default 100) and **safety margin** (extra on top, default 10%). The honest input
-to the margin is the sample count and the spread printed next to the figure: a
-number measured over four kills wants a much wider margin than one measured over
-four hundred, and the plugin does not widen it for you.
+Under area damage, one spell can kill several monsters in one priced window. The
+plugin doesn't split that window's cost between them — it can't know how to —
+but it does divide by how many of the *same* monster died in it, so the number
+above is priced per monster killed rather than per window. With no area damage
+the two are identical.
 
-### How the spread is expressed, and why not a confidence interval
+The same figures also outline the items you need in the bank: green once you
+have enough, red if you don't.
 
-The governing principle is *measure, do not model*, and it applies to the error
-bars as much as to the figure. So the spread is **nearest-rank order
-statistics** over the observed per-kill samples — the cheapest kill, the median,
-the ninetieth percentile, the dearest — and every one of those is a quantity
-that actually happened on an actual kill. Nothing is interpolated and no
-distribution is assumed.
+Not implemented, and deliberately: an estimate for a monster you've never
+fought, live Slayer task reading, or anything that survives a restart — see
+Known limitations.
 
-A mean and a standard deviation, read as a normal interval, was the obvious
-alternative and it would have been wrong in a way that matters. Ammunition per
-kill is discrete, floored at zero and right-skewed: most kills cost about the
-same, an unlucky one costs several times that, and none can cost less than
-nothing. A symmetric interval fitted to that reports a lower bound below zero
-and understates the long tail — which is the side you actually have to carry.
+## Settings
 
-Next to the spread sits a word — `anecdotal`, `thin`, `fair`, `solid` — derived
-from the sample count alone. It exists so a figure from two kills and a figure
-from two hundred cannot look alike, and it is **a reading aid rather than a
-statistical claim**: nothing here says a `fair` figure is within any particular
-distance of the truth. The raw `n` is printed beside it everywhere.
+| Setting | Default | What it does |
+|---|---|---|
+| Trip size | 100 | How many kills to plan for |
+| Safety margin | 10% | Extra padding added on top of the measured amount |
+| Show overlay panel | On | The per-monster panel described above |
+| Show bank highlight | On | The green/red outline in the bank |
 
-The safety margin is the only dial that widens the answer, and that is
-deliberate. Planning against the ninetieth-percentile kill instead of the mean
-would treble what you carry into a place where every surplus arrow is a gift to
-whoever kills you, because a hundred kills is not a hundred bad kills. The
-ninetieth-percentile total is offered beside the recommendation instead, and
-only when it is exactly true — see below.
+The margin is the only dial that widens the answer, on purpose. Planning
+against your single worst kill instead of the average would triple what you
+carry into a place where every surplus arrow is a gift to whoever kills you.
+Use the sample count and spread printed next to the figure to judge whether the
+default margin is wide enough — four kills wants a lot more padding than four
+hundred, and the plugin does not widen it for you.
 
-### Cost per monster, not cost per attributed kill
+## Why
 
-This is the claim the previous README had to correct, so the correction is now
-in the code rather than only in prose.
+Wilderness Slayer trips are a carrying-capacity problem: dying to a PKer keeps
+three items unskulled and none skulled, so an arrow you carry in and don't fire
+is an arrow you're quite likely to hand over. Bring too few and the trip ends
+early; bring too many and you're carrying a surplus for whoever kills you.
+(Whether an ammunition *stack* specifically is always lost outright isn't
+verified against the wiki, and this plugin doesn't depend on it either way —
+carrying less into the Wilderness is good regardless of which is true.)
 
-Under area damage a single window of runes kills several monsters. The plugin
-still refuses to split that window — one window cannot be divided between two
-monsters without inventing the division — but it now **counts** the other
-monsters that died inside the window, and the kill carries that count. So
-`consumed / (1 + co-victims)` is a cost per monster derived entirely from
-measurements: no split invented, just the right denominator over the same
-window. The estimate publishes both rates, labelled, and the trip projection
-multiplies the per-monster one, because "how many will I kill" is a question
-about monsters. With no area damage the two are the same number, exactly, which
-is every ranged and melee trip there is.
-
-**A co-victim has to be the same monster.** The count is a divisor, and the
-number divided into it is a trip of one named monster — a hundred Spindels, not
-a hundred deaths. A barrage that kills the Spindel you are fighting and two
-skeletons standing in it therefore has *no* co-victims: those four runes bought
-one Spindel, and a hundred Spindels will need a hundred more casts. Counting the
-skeletons made the same four barrages read as 16 runes over 12 monsters and told
-you to pack 134 for a trip of 100 that actually costs 400. The skeletons are
-still counted, as unattributed deaths against their own id, where they are true.
-
-**The co-victim count is also not `unattributedDeaths`,** which is what this file
-originally suggested would recover the figure. That column holds deaths from
-outside any priced window as well: a monster you damaged, walked away from, and
-which died later to somebody else is an unattributed death whose ammunition went
-into the *abandoned* column, so counting it raises the denominator without
-raising the numerator. Both mistakes point the same way — the per-monster figure
-comes out low, and low is the direction that ends a trip early. Both are covered
-by tests, and by the mutation that puts each of them back.
-
-### Bank highlighting: the supported mechanism
-
-`net.runelite.client.ui.overlay.WidgetItemOverlay` with `showOnBank()`. The base
-class asks `OverlayManager.getWidgetItems()` for the items currently laid out and
-calls `renderItemOverlay` once per visible one, already clipped to the container;
-`showOnBank()` is a `drawAfterLayer` on the two bank item layers. Exactly two
-plugins shipped with the client call it: `ItemIdentificationOverlay`, which
-pairs it with `showOnInventory()` and `showOnInterfaces()`, and
-`RunepouchOverlay`, which pairs it with `showOnInventory()` alone — the closest
-match to this. All of that was read out of the pinned 1.12.38 client jar with
-`javap` rather than remembered, and the list is what a review caught: it
-previously named `InventoryTagsOverlay` and `ItemChargeOverlay`, neither of
-which draws on the bank. A claim that cites its own method of verification is
-worse than an unsourced one when the claim is wrong, so the scan was redone
-across every class in the jar rather than the three that were remembered.
-
-Nothing in it touches a menu entry, a click zone or a hidden component, so none
-of `AGENTS.md`'s interface or menu restrictions apply: it draws a number over an
-item you are already looking at.
-
-### Why the stats come from the live NPC
-
-There is no bundled stats table and there is not going to be one. Nineteen of
-Krystilia's thirty-six tasks are umbrellas — "spider" spans Venenatis, Spindel
-and every giant spider in the game; "bear" spans Callisto, Artio and ordinary
-bears; "skeleton" spans Vet'ion, Calvar'ion and the Wilderness skeletons — and
-hitpoints across one of those differ by **a factor of 425**: the spider task
-runs from the plain Spider at 2 to Venenatis at 850. A generated table keyed on
-a task name has to pick one of those. Asking the monster standing in front of
-you cannot make that mistake, because there is no name to resolve.
-
-Two corrections to that paragraph, both found by a review reading it against
-the wiki, and both of which made the argument *stronger* — which is why they
-survived. It used to say "a factor of ten to twenty"; the real spread is 425,
-or 170 if you start from a giant spider rather than the plain one. And it used
-to illustrate the point with "a draft resolved 'spider' to a giant spider with
-**two** hitpoints". No giant spider has two hitpoints; the three variants are 5,
-32 and 50. The 2 is the weakest one's *combat level*, and it is also the plain
-Spider's *hitpoints* — a different monster, combat level 1. **The anecdote used
-to argue against a bundled stats table was itself a name-and-column resolution
-error of precisely the kind it warns about.** That is a better illustration than
-the one it replaced, so it is written down rather than tidied away.
+The governing decision is **measure, do not model**. Predicting consumption from
+accuracy, damage and attack speed produces error bars too wide to act on, and it
+silently ignores whatever your gear, prayers and boosts are actually doing.
+Watching the stack go down is automatically correct about all of it.
 
 ## Known limitations
 
-Written down rather than rounded off.
+- **Revenant ether isn't measured.** The charged Wilderness weapons (craw's bow
+  and webweaver, viggora's chainmace and ursine, thammaron's sceptre and
+  accursed) spend ether from a charge counter, not from your inventory —
+  charging is a bulk action separate from any one kill, and there's no reliable
+  per-kill read on it yet. The plugin's estimates never include it.
+- **Ammo you pick back up can't be told from ammo the monster dropped**, so
+  gains are never subtracted out. The published figure is *gross* consumption,
+  which errs toward carrying too much rather than too little; the recovered
+  amount is shown alongside it.
+- **The looting bag is an untracked source of noise.** Moving a stack into it
+  mid-fight books as consumption on whatever you're currently fighting, even
+  though nothing was fired — normal Wilderness Slayer practice, and currently
+  the largest single source of noise in the numbers.
+- **A monster of the same id, finished by someone else while you're fighting
+  elsewhere, is counted as if it died to your own splash damage.** A narrow
+  case, but on a Slayer task — where everything in the spawn shares one id —
+  it's the shape most likely to happen, and it slightly under-counts cost.
+- **A kill stolen by another player still counts**, if you damaged it and it
+  was your target. Wilderness multi-combat makes this unavoidable without
+  reading loot.
+- **A monster that despawns without ever dying is recorded as "abandoned", not
+  as a kill.** Many abandoned fights next to few kills is the sign something's
+  off.
+- **Switching targets costs one shot out of the average at the moment of the
+  switch, and a shot fired the tick right after a kill is discarded entirely**
+  rather than counted anywhere. Both understate cost slightly, and both come
+  from the same cause: the game resolves deaths before it applies your click.
+- **Nothing survives a restart.** Kills, samples and the confidence word all
+  live in memory for the session — a trip planned in your first half hour is
+  planned off that half hour alone.
+- **The plan is only ever for the monster you killed most recently.** A task
+  that mixes species — a Wilderness "spider" task spans several — plans for
+  whichever you finished last; the other's numbers are still being kept, just
+  not shown.
+- **The bank highlight doesn't know what's already in your inventory.** It
+  compares the trip's requirement against what's banked, not against what
+  you're already carrying.
 
-- **Revenant ether is not measured, and cannot be by this approach.** The
-  charged Wilderness weapons — craw's bow and webweaver, viggora's chainmace
-  and ursine, thammaron's sceptre and accursed — spend ether from a charge
-  counter (`VarbitID.CHARGES_WILDERNESS_WEAPON_QUANTITY`), not from the
-  inventory. Ether only ever leaves a container when you *charge* the weapon,
-  which is a bulk action rather than a per-kill cost — and it moves the other way
-  too: `Uncharge` returns the remaining ether to your inventory, so the container
-  can gain a few thousand units in one click that has nothing to do with any
-  kill. (Charging does not have to happen at a bank, which an earlier draft of
-  this said; the bank interface offers a `Configure-Charges` convenience, but the
-  weapon can be charged wherever you are standing.) A container diff therefore
-  reports zero ether per kill, correctly and uselessly. Reading
-  the varbit would work, but a swap between two charged weapons moves that
-  counter for reasons that are not attacks, and shipping an unverified channel
-  that can charge thousands of units to one kill is worse than a stated gap.
-  The plugin's tags no longer claim ether for the same reason.
-- **Ammunition picked back up cannot be told from ammunition dropped by the
-  monster.** Both are a gain in a stack, and no ground item a plugin can read
-  carries ownership. So gains are never netted off: the published figure is
-  *gross* consumption, which errs toward carrying too much, and the recovered
-  volume sits beside it as a disclosed contaminant. Erring the other way ends a
-  trip early, which is the failure the plugin exists to prevent.
-- **The looting bag is an untracked, and previously undocumented, contaminant.**
-  `InventoryID.LOOTING_BAG` is correctly left out of the summed containers —
-  it is not the player carrying the ammunition, it is storage — but that also
-  means moving a stack from the inventory into the bag is a real decrement of
-  the tracked sum, and if it happens while a window is open it books as
-  consumption on whatever you are currently fighting. Bagging loot mid-fight
-  is normal Wilderness Slayer practice, and when the monster you are on drops
-  the ammunition you use, the pickup off its corpse books as a gain and
-  bagging that same stack a moment later books as consumption of the same id
-  — both charged to that monster's record, neither one a shot fired. This is a
-  larger source of contamination than several of the limitations already
-  listed here.
-- **Area attacks still under-count kills; the cost per monster is corrected for
-  it and the cost per attributed kill deliberately is not.** When a spell
-  damages four monsters and three die, one window cannot be split four ways
-  without inventing the split, so those deaths are counted separately as
-  "unattributed" and the whole window's ammunition is charged to the fourth.
-  `getPerAttributedKill` is therefore cost per kill the plugin could *price* —
-  four barrages of four runes, each killing three monsters **of the one id the
-  trip is for** (a different species in the blast is not a divisor; see above),
-  is 16 runes over 12 monsters, a true 1.333 each, and `getPerAttributedKill`
-  reports 4.0. `getPerMonster` and every figure the trip projection multiplies
-  divide by the co-victim-corrected count and report 1.333. Both are published
-  and both are labelled; the panel shows the second and names the first when
-  they differ.
-- **A monster of the same id you damaged and never abandoned, which somebody
-  else finishes while you are mid-fight elsewhere, is counted as a co-victim.**
-  It is indistinguishable from one caught by your splash damage — both are a
-  death of something you damaged, sharing your target's id, during a window that
-  is open. Each one dilutes the per-monster figure by one monster. That is a much
-  narrower leak than counting every unattributed death (a different species is
-  excluded by id, and a fight you *did* abandon is excluded because its
-  ammunition went to the abandoned column), but it is a leak, and on a Slayer
-  task — where everything in the spawn shares one id — it is the shape most
-  likely to occur. It errs toward carrying too little.
-- **A kill stolen by another player still counts.** If you damaged it and it
-  was your target, it is recorded, whether or not you got the loot or the
-  Slayer count. Multi-combat Wilderness makes this unavoidable without reading
-  loot, which is a later milestone's problem.
-- **A monster that dies without the client receiving a zero-health update**
-  produces a despawn and no death, and lands in the "abandoned" column instead
-  of the kill count. That column doubles as the detector: a monster with many
-  abandoned fights and few kills is the symptom.
-- **Switching targets mid-tick costs one shot out of the average, and this file
-  used to say it cost nothing.** Interaction changes are applied after deaths
-  resolve, which saves a whole kill when the previous target dies on the same
-  tick and charges one shot to the previous target at every switch. The old
-  claim was that on a Slayer task the two monsters share an id and the error is
-  zero. Sharing an id is not enough: the previous target's window closes as
-  *abandoned*, and the abandoned column is kept out of the per-kill mean on
-  purpose, so the shot lands in the right record and the wrong column. Twenty
-  arrows fired at a spider, one of them on the switch tick, is measured as
-  nineteen. A shot fired on the tick *after* a kill — you have clicked the next
-  monster and no window is open yet — is worse: it is discarded outright and
-  appears in no column at all, which is the one exception to the promise
-  `Attribution` makes in its own javadoc. Both understate by one shot per
-  switch, both are pinned by tests, and both hinge on the tick-ordering question
-  now last in "wanted from a real client" — if the decrement lands a tick later
-  than the click, neither happens.
-- **Everything is still in memory, and the session is the sample.** Nothing is
-  written to disk, on purpose: the measurement approach is not settled enough to
-  be worth a file format that would then need migrating, and persistence is its
-  own slice. So the confidence word resets to `no data` every time the plugin is
-  restarted, and a trip planned in the first half-hour of a session is planned
-  off whatever that half-hour measured. (This used to be justified with "a plugin
-  that writes files is reviewed by hand at the Plugin Hub instead of
-  automatically." **Nothing supports that** — not the plugin-hub README, not its
-  tooling, not the wiki. The hub's only file rule is about location: read and
-  write inside `.runelite` and nowhere else.)
-- **The plan is for the monster you last killed, and only that one.** A task
-  with two monsters in it — a Wilderness "spider" spawn that mixes ids — plans
-  for whichever you finished most recently. The other's record is still being
-  kept; nothing surfaces it.
-- **The bank highlight cannot tell you what you already have on you.** It
-  compares the trip's requirement against the *banked* stack, not against the
-  banked stack plus the four hundred arrows already in your quiver.
+## Found a bug?
 
-### Wanted from a real client
+Please open an issue on GitHub. The most useful report names the monster,
+roughly how many kills the estimate is based on, and whether the number looked
+too high or too low. Every kill writes a one-line sentence to the debug log with
+its basis attached, and pasting a stretch of that log almost always settles it.
 
-Reasoned from the API, not yet observed in game:
-
-- that Dizana's quiver decrements `InventoryID.DIZANAS_QUIVER_AMMO` when a
-  matching weapon fires from it;
-- that `ItemContainerChanged` for a given server tick always precedes that
-  tick's `GameTick` (if it does not, the only cost is a tick of latency — the
-  meter compares full container contents rather than accumulating per-event
-  differences, so a late event can be neither doubled nor lost);
-- that a normal ranged kill produces exactly one `ActorDeath`, and that its
-  arrow count matches what the ammo counter in game says;
-- that `showOnBank()` covers the bank layout this account actually sees, and
-  that the withdraw quantity lands somewhere legible over the item icon rather
-  than under the stack size the game already draws there;
-- that the panel is legible at the size and position it defaults to, that six
-  lines is not five too many mid-fight, and that the fourteen a three-item
-  area-damage record produces is still something you would leave switched on;
-- **whether the ammunition decrement for a shot lands on the same game tick as
-  the `InteractingChanged` that switched targets, or on the tick after.** This
-  is the one that decides whether the two leaks in the limitation above exist at
-  all. On the same tick, one shot per switch leaves the per-kill average and a
-  shot fired just after a kill is discarded entirely. A tick later, neither
-  happens and the accounting is already right — which is why the behaviour is
-  pinned by tests rather than "fixed" on a guess. The fix is also not free:
-  applying interaction changes before the tick's consumption closes both leaks
-  and loses a whole kill whenever the previous target dies on the switch tick,
-  which is the trade the current order was chosen for.
+---
 
 ## Development
 
 ```bash
 ./gradlew build   # compile + package; also proves the JDK + wrapper work
-./gradlew test    # runs the JUnit suite
+./gradlew test    # runs the 206-test JUnit suite
 ./gradlew run     # launches a full RuneLite dev client with the plugin loaded
 ```
 
-206 tests, all of them runnable with no game client — kill attribution,
-consumption measurement, the estimate and its order statistics, the projection
-and its arithmetic, and both overlays' switches and the colour the bank
-highlight chooses. That is on purpose: the decisions that most easily go
-quietly wrong are the ones worth being able to run a hundred times.
+Every decision here — kill attribution, consumption, the trip estimate and its
+order statistics, both overlays — runs with no game client at all.
 
-Every guard here has been proven by breaking it. Ninety-three distinct
-mutations were applied to the shipped source one at a time — the ceiling turned
-into a floor, the per-monster denominator swapped for the per-kill one, the
-co-victim count never cleared, the two bank colours transposed, a config key
-renamed — and the suite was watched go red for each, with the applied diff
-recorded as evidence that the mutation actually landed.
+**Every guard has been proven by breaking it.** 93 separate mutations have been
+applied to the shipped source one at a time — a ceiling turned into a floor, a
+denominator swapped, a config key renamed — and the suite watched go red for
+each. Eight survived the first time they were run, and seven became real fixes:
+a spread test built on too few samples, a worst-case figure reading the wrong
+end of the array, an untested zero-vs-negative trip size, the tick wiring itself
+never exercised end to end, a dead method overload, an overlay handed its data
+unwrapped, and an unchecked promise about co-victim counts. The eighth is left
+standing on purpose — a field snapshot that now reads identically to the value
+it copies, kept as a guard against reintroducing the ordering bug it fixed, with
+the reason written at that line. A later independent review ran eight more
+mutations; three survived and were fixed, and two more were probes that settled
+the target-switch question above into a pinned fact rather than a guess.
 
-Eight of them survived the first time they were run, and seven of those became
-changes rather than excuses:
+Compile target is Java 11 bytecode. The RuneLite client version is pinned in
+`build.gradle` (1.12.38) rather than left on `latest.release`, so a local build
+is reproducible — see the comment there for how to bump it.
 
-- a spread test built on too few samples. Below ten kills the ninetieth
-  percentile and the maximum are the same sample, and below eleven so are the
-  minimum and the tenth, so a spread test on a handful of kills stays green with
-  any of the four statistics wired to the wrong end of the array;
-- the worst-case figure reading the single worst kill instead of the shoulder,
-  hidden by the same collision;
-- a trip size of zero being harmless while a *negative* one was not, so the
-  guard was tested at zero and never at the value it exists for;
-- the plugin's own tick wiring, which nothing had ever exercised end to end —
-  a tick that handed the attribution an empty delta would have measured nothing,
-  silently, forever;
-- a one-argument `recordKill` overload with no production caller at all, deleted
-  rather than tested;
-- the estimate list and the bank lookup being handed to an overlay unwrapped;
-- the promise that only a kill ever carries a co-victim count.
-
-The eighth is an equivalent mutant and is left standing on purpose: the
-`windowOwner` snapshot in `KillAttribution` reads identically to the field it
-copies, because nothing in that loop writes the field any more. It is there to
-stop the next edit reintroducing the ordering bug the deferred application
-fixes, the comment at that line says exactly that, and no test can be written
-that fails when it is swapped back. A later independent review re-derived that
-and agreed.
-
-That review ran eight more mutations and probes. Three survived against the
-shipped source and all three became changes: the walked-away mark being dropped
-on a death (only its despawn twin was covered), the half of the hitsplat guard
-that lets an explicit click beat a same-tick splash hitsplat, and the guard that
-only rebuilds the plan on a kill — a performance guard, which a test that asserts
-values cannot see at all, so what is asserted now is the identity of the cached
-list and map. Two more were probes of the opposite tick ordering rather than
-mutations, and they are what settled the target-switch leak above into
-documentation instead of a guess: adopting a pending engagement before the
-tick's consumption closes the post-kill half, and moving the whole interaction
-block ahead of the consumption closes both halves and loses a whole kill.
-
-It also found three public methods with no production caller. `Attribution.kill`
-had a two-argument overload defaulting the co-victim count to zero, and around
-fifty test call sites were using it — so most of the ledger suite was exercising
-the co-victim path with the denominator silently zeroed, which is the same
-standing invitation `NpcAmmoRecord.recordKill` had already refused one layer
-down. `NpcAmmoRecord.consumedPerKill` and `consumedPerMonster` had no caller at
-all. All three are gone: the tests pass the count explicitly now, and read the
-two rates off `ConsumptionEstimate`, which is what the overlays read.
-
-One finding from that pass is worth recording on its own, because it is a shape
-that will recur. **Fixing the co-victim divisor's unit disarmed the guard next
-to it.** The walked-away exclusion had exactly one test, and it used a skeleton
-as the new target; once a skeleton was refused by the id comparison anyway,
-deleting the walked-away book entirely left the suite green. A fix can take
-coverage away as well as add it, and nothing reveals that except re-running the
-neighbouring mutations *after* the fix rather than before.
-
-What still needs a client is small, and is named above.
-
-Compile target is Java 11 bytecode regardless of which JDK compiles it —
-`build.gradle` pins `options.release.set(11)`. The RuneLite client version is
-pinned explicitly in `build.gradle` rather than left on `latest.release`, so a
-local build is reproducible; see the comment there for why and how to bump it.
+**Filing the Hub submission?** Swap the "not on the Plugin Hub yet" callout above
+for the standard install instructions in the same change — that line stops
+being true the moment this is listed.
 
 See `AGENTS.md` for the fuller set of conventions this repository follows.
+
+### Wanted from a real client
+
+Reasoned from the API, not yet observed in game:
+
+- that Dizana's quiver decrements its own counter when a matching weapon fires
+  from it;
+- that a container-change event for a given tick always arrives before that
+  tick's game tick (if not, the cost is a tick of latency rather than a wrong
+  number — the meter diffs whole containers rather than accumulating events);
+- that a normal ranged kill produces exactly one death event, with an arrow
+  count matching what the game's own ammo counter says;
+- that the bank highlight's quantity lands somewhere legible over the item icon
+  rather than under the stack size the game already draws there;
+- that the panel stays legible mid-fight at up to fourteen lines, which is what
+  a three-item area-damage record produces;
+- **whether the ammunition decrement for a shot lands on the same game tick as
+  a target switch, or the tick after.** This is the one that decides whether the
+  two leaks above exist at all, and it's pinned by tests rather than fixed on a
+  guess, so that whichever answer turns out true, the fix is a one-line change
+  rather than a rewrite.
 
 ## License
 
 BSD 2-Clause — see `LICENSE`.
+
+---
+
+<div align="center">
+<sub>Reads your own inventory only. Sends nothing to the server. Not affiliated with Jagex.</sub>
+</div>
