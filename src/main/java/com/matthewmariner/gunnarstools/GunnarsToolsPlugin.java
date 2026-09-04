@@ -1,7 +1,6 @@
 package com.matthewmariner.gunnarstools;
 
 import com.google.inject.Provides;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
@@ -10,8 +9,12 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.Item;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemContainer;
+import net.runelite.api.KeyCode;
+import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
 import net.runelite.api.events.ActorDeath;
@@ -20,7 +23,10 @@ import net.runelite.api.events.GameTick;
 import net.runelite.api.events.HitsplatApplied;
 import net.runelite.api.events.InteractingChanged;
 import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.NpcDespawned;
+import net.runelite.api.gameval.InventoryID;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -44,15 +50,27 @@ import net.runelite.client.ui.overlay.OverlayManager;
  *
  * <p>The measurement is {@link ConsumptionMeter} (what was spent),
  * {@link KillAttribution} (who it was spent on, and which deaths were the
- * player's) and {@link AmmoLedger} (the running record per monster). The answer
- * is {@link ConsumptionEstimate} (the figure and its spread) and
- * {@link TripPlanner} (what to bring for a trip of a given size), drawn by
- * {@link TripPanelOverlay} and {@link BankWithdrawalOverlay}.
+ * player's) and {@link AmmoLedger} (the running record per monster and setup).
+ * The answer is {@link ConsumptionEstimate} (the figure and its spread),
+ * {@link TripPlanner} (what to bring) and {@link TripAdvisor} (which of those the
+ * player is actually owed right now), drawn by {@link TripPanelOverlay} and
+ * {@link BankWithdrawalOverlay}.
+ *
+ * <h2>The subject of the plan is chosen, not inherited from the last corpse</h2>
+ *
+ * <p>Until {@link PlanTarget} existed, this plugin's subject was "whatever you
+ * last killed", which meant it had nothing to say until a kill had happened and
+ * could never say anything about a monster you had not fought. Both of those are
+ * the state a player is in at a bank with a fresh task, which is the exact moment
+ * the answer is wanted. Now the subject is a pin, or the monster being fought, or
+ * the last kill, in that order, and {@link AmmoArchive} means a previous session's
+ * totals are there to answer with — as an estimate, labelled, never republished as
+ * a measurement.
  *
  * <p>This class is deliberately thin. Every handler translates a RuneLite event
  * into a call on one of those and decides nothing itself, so that the decisions
  * all live somewhere a test can reach without a game client. The one piece of
- * state it owns is the cached plan below, and the reason it owns it is timing
+ * state it owns is the cached advice below, and the reason it owns it is timing
  * rather than logic.
  */
 @Slf4j
@@ -68,11 +86,20 @@ import net.runelite.client.ui.overlay.OverlayManager;
 )
 public class GunnarsToolsPlugin extends Plugin
 {
+	/** The menu entry that pins a monster. Client-side only; nothing reaches the server. */
+	static final String PIN_OPTION = "Plan trip";
+
 	@Inject
 	Client client;
 
 	@Inject
 	GunnarsToolsConfig config;
+
+	@Inject
+	ConfigStore configStore;
+
+	@Inject
+	ClientThreadRunner clientThread;
 
 	@Inject
 	OverlayRegistry overlayRegistry;
@@ -99,44 +126,69 @@ public class GunnarsToolsPlugin extends Plugin
 	private final AmmoLedger ledger = new AmmoLedger();
 
 	/**
-	 * The plan the two overlays draw, recomputed when a kill or a config change
-	 * makes it stale and never in a render loop.
+	 * What previous sessions left behind. Loaded once at {@link #startUp()} and
+	 * rewritten after every kill, so a crash costs one monster's last few kills
+	 * rather than the whole session.
+	 *
+	 * <p>Not final because it is replaced wholesale on load and on teardown, and
+	 * replacing it is what makes {@code shutDown()} symmetric with a fresh install
+	 * — an archive left populated would be folded into the next session's on top of
+	 * whatever that one reloads.
+	 */
+	private AmmoArchive archive = new AmmoArchive();
+
+	/**
+	 * The answer the two overlays draw, recomputed when a kill, a config change, a
+	 * change of target or a change of equipment makes it stale — never in a render
+	 * loop.
 	 *
 	 * <p>Cached rather than derived on demand because {@code AGENTS.md} is
-	 * explicit that per-frame work stays minimal, and building a plan sorts a
+	 * explicit that per-frame work stays minimal, and building an answer sorts a
 	 * sample array per item.
 	 *
-	 * <h2>Two threads write these three fields, not one</h2>
+	 * <h2>One thread writes this field, and it took two goes to get there</h2>
 	 *
 	 * <p>This comment used to say that game ticks, config events and overlay
 	 * rendering all run on the client thread, so there was nothing to
 	 * synchronise. Ticks and rendering do. Config events do not:
 	 * {@code ConfigManager.setConfiguration} posts {@code ConfigChanged} on the
 	 * event bus synchronously, on whichever thread called it, and for the settings
-	 * panel that thread is the Swing EDT. So {@link #onConfigChanged} writes these
-	 * fields from the EDT while the two overlays read them from the client thread,
-	 * with no lock and nothing volatile.
+	 * panel that thread is the Swing EDT.
 	 *
-	 * <p>It is still safe, and the real reason is worth stating in place of the
-	 * wrong one. {@link #plan} and {@link #withdrawals} are only ever assigned
-	 * freshly built collections already wrapped by {@link Collections}'
-	 * unmodifiable views, whose reference to what they wrap is a final field — so
-	 * a thread that sees the new wrapper is guaranteed by JLS 17.5 to see
-	 * everything that was reachable from it when its constructor finished. A
-	 * thread that has not seen the write yet draws the previous plan for a frame
-	 * or two, which is indistinguishable from ordinary latency. {@link
-	 * #planSubject} carries no such guarantee and needs none: it is only ever
-	 * pointed at a record the client thread built and mutates, and the EDT can
-	 * only re-point it at one that thread already has.
+	 * <p>The reply to that used to be an argument about safe publication, and it
+	 * was correct as far as it went: a {@link TripAdvice} is immutable, every
+	 * collection reachable from one is already wrapped by
+	 * {@link java.util.Collections}' unmodifiable views, and a thread that sees the
+	 * new object is guaranteed by JLS 17.5 to see everything reachable from it. A
+	 * reader that has not seen the write yet draws the previous answer for a frame,
+	 * which is indistinguishable from ordinary latency.
 	 *
-	 * <p>The safety is therefore real but incidental — it falls out of the
-	 * unmodifiable wrappers, which are there so an overlay cannot edit the plan.
-	 * Anything later that assigns a bare {@code ArrayList} here, or that mutates a
-	 * published plan in place, loses it without a compiler or a test saying so.
+	 * <p>What that argument covers is handing the result over. It says nothing
+	 * about <em>producing</em> it, and producing it is what grew teeth: choosing a
+	 * target now walks {@link AmmoLedger}'s map, which the client thread inserts
+	 * into the first time a new monster is fought. So {@link #onConfigChanged} does
+	 * its work on the client thread instead — see {@link ClientThreadRunner} — and
+	 * this field has one writer again.
+	 *
+	 * <p>The publication argument is still worth keeping, because it is what makes
+	 * a reader on another thread safe at all. Anything later that mutates a
+	 * published {@link TripAdvice} in place, or hands one a bare
+	 * {@code ArrayList}, loses it without a compiler or a test saying so.
 	 */
-	private List<TripPlan> plan = Collections.emptyList();
-	private Map<Integer, Long> withdrawals = Collections.emptyMap();
-	private NpcAmmoRecord planSubject;
+	private TripAdvice advice = TripAdvice.waitingFor(null, TripAdvice.Waiting.A_TARGET);
+
+	/**
+	 * The two things {@link #advice} was built about, kept so a tick can tell
+	 * whether anything moved without rebuilding to find out.
+	 *
+	 * <p>Compared by reference on purpose. {@link KillAttribution} only replaces
+	 * its owner when the player engages a different scene index, and the ledger
+	 * only replaces a record when a different monster or setup is killed, so
+	 * reference identity is exactly "the subject changed" and costs two
+	 * comparisons a tick instead of a config read and a name search.
+	 */
+	private FoughtNpc adviceOwner;
+	private NpcAmmoRecord adviceLastKill;
 
 	/**
 	 * Whether {@link #startUp()} has run and {@link #shutDown()} has not yet
@@ -155,6 +207,16 @@ public class GunnarsToolsPlugin extends Plugin
 		log.debug("Gunnar's Tools starting");
 		overlayRegistry.add(tripPanelOverlay);
 		overlayRegistry.add(bankWithdrawalOverlay);
+
+		// Before the first rebuild, so the first thing the panel draws already has
+		// last session's numbers in it. This is the whole point of the archive: the
+		// answer exists before the first kill, not after it.
+		archive = config.rememberBetweenSessions()
+			? AmmoArchive.parse(config.archive())
+			: new AmmoArchive();
+		log.debug("Gunnar's Tools loaded {}", archive);
+
+		rebuildPlan();
 		active = true;
 	}
 
@@ -162,8 +224,8 @@ public class GunnarsToolsPlugin extends Plugin
 	protected void shutDown()
 	{
 		// Removed first and synchronously. An overlay left in the manager keeps
-		// drawing, and the four lines at the bottom of this method are about to
-		// empty everything it draws from underneath it.
+		// drawing, and the lines below are about to empty everything it draws from
+		// underneath it.
 		overlayRegistry.remove(tripPanelOverlay);
 		overlayRegistry.remove(bankWithdrawalOverlay);
 
@@ -171,7 +233,7 @@ public class GunnarsToolsPlugin extends Plugin
 		// out rather than only per kill, because a per-kill line scrolls past and
 		// this is the shape a reader actually wants: one line per monster, with the
 		// sample count each figure rests on.
-		log.debug("Gunnar's Tools stopping with {} monster(s) measured", ledger.size());
+		log.debug("Gunnar's Tools stopping with {} record(s) measured", ledger.size());
 		ledger.getRecords().forEach(record -> log.debug("  {}", record));
 
 		// One line per thing startUp implicitly brought into being. The meter
@@ -179,11 +241,17 @@ public class GunnarsToolsPlugin extends Plugin
 		// from a different session; the attribution holds an open window and a set
 		// of NPC indices that will mean different NPCs by the time the plugin is
 		// switched on again; the ledger holds the session's measurements, which
-		// belong to the session; and the plan is a projection off that ledger, so it
+		// belong to the session; the archive is a copy of a config value that
+		// startUp reloads; and the advice is a projection off all of them, so it
 		// outlives its own evidence unless it goes too.
+		//
+		// The archive is deliberately *not* written here. Every kill already wrote
+		// it, so there is nothing newer to save, and a teardown that performs I/O is
+		// a teardown that can fail.
 		meter.clear();
 		attribution.reset();
 		ledger.clear();
+		archive = new AmmoArchive();
 		clearPlan();
 		active = false;
 	}
@@ -203,7 +271,13 @@ public class GunnarsToolsPlugin extends Plugin
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
 		final ItemContainer container = event.getItemContainer();
-		meter.containerChanged(event.getContainerId(), container == null ? null : container.getItems());
+		final Item[] items = container == null ? null : container.getItems();
+		meter.containerChanged(event.getContainerId(), items);
+
+		if (event.getContainerId() == InventoryID.WORN)
+		{
+			equip(Loadout.of(items));
+		}
 	}
 
 	/**
@@ -223,41 +297,56 @@ public class GunnarsToolsPlugin extends Plugin
 
 		if (tickEnded(meter.tickEnded()))
 		{
-			logPlan();
+			logAdvice();
 		}
 	}
 
 	/**
-	 * Resolves one tick's verdicts into the ledger and, if any of them was a kill,
-	 * into the projection.
+	 * Resolves one tick's verdicts into the ledger and, if anything the answer
+	 * depends on moved, into a fresh answer.
 	 *
 	 * <p>Split out from {@link #onGameTick} so it can be run with no client: the
 	 * two lines left above it — priming the containers and resolving an item name
 	 * for the log — are the only parts of a tick that read the game, and they are
 	 * the only parts no offline test can reach.
 	 *
-	 * @return whether the tick produced a kill, and therefore a new answer
+	 * @return whether the tick produced a kill, and therefore a new measurement
 	 */
 	boolean tickEnded(AmmoDelta delta)
 	{
 		final List<Attribution> attributions = attribution.tickEnded(delta);
 		boolean killed = false;
+		int killedNpcId = -1;
+
 		for (Attribution result : attributions)
 		{
 			ledger.apply(result);
 			log.debug("{} -> {}", result.getKind(), ledger.get(result.getNpc().getId()));
 
-			// Accumulated rather than assigned. A barrage resolves as a kill
-			// followed by its co-victims' unattributed deaths, so the last verdict
-			// of the tick is routinely not the kill.
-			killed |= result.getKind() == Attribution.Kind.KILL;
+			// Latched rather than assigned from the last verdict. A barrage resolves
+			// as a kill followed by its co-victims' unattributed deaths, so the last
+			// verdict of the tick is routinely not the kill. The id is safe to
+			// overwrite because a tick produces at most one: KillAttribution fills a
+			// single kill slot per tick, and everything else in the list is a death
+			// it refused to price.
+			if (result.getKind() == Attribution.Kind.KILL)
+			{
+				killed = true;
+				killedNpcId = result.getNpc().getId();
+			}
 		}
 
-		// Only a kill changes what a trip needs. An abandoned fight and an
-		// unattributed death both move columns the projection does not read, and
+		if (killed)
+		{
+			remember(killedNpcId);
+		}
+
+		// Only a kill or a change of subject changes the answer. An abandoned fight
+		// and an unattributed death both move columns nothing published reads, and
 		// rebuilding on every tick would sort every sample series sixty times a
 		// minute for nothing.
-		if (killed)
+		if (killed || attribution.getOwner() != adviceOwner
+			|| ledger.getMostRecentKill() != adviceLastKill)
 		{
 			rebuildPlan();
 		}
@@ -271,16 +360,48 @@ public class GunnarsToolsPlugin extends Plugin
 	 * changes on the same bus, and rebuilding on all of them would be a sort per
 	 * keystroke in somebody else's settings panel.
 	 *
-	 * <p>This handler runs on the Swing EDT rather than the client thread — see
-	 * the field it writes for what that does and does not cost.
+	 * <p>The archive key is filtered out on top of that, and it is not an
+	 * optimisation. Writing it goes through {@code ConfigManager}, which posts the
+	 * change back on this same bus synchronously; a handler that rebuilt on it
+	 * would run inside the write that provoked it, and any future rebuild that
+	 * wrote anything would not terminate.
+	 *
+	 * <p><b>This handler arrives on the Swing EDT and does its work on the client
+	 * thread.</b> {@code ConfigManager.setConfiguration} posts on whichever thread
+	 * called it, and from the settings panel that is the EDT — while every other
+	 * handler on this class, and both overlays, are the client thread. Publishing
+	 * an immutable answer makes the <em>result</em> safe to hand over, and says
+	 * nothing about the reading that produced it: choosing a target walks the
+	 * ledger's map, and the client thread inserts into that map the first time a
+	 * new monster is fought. So the whole body is marshalled rather than made
+	 * thread-safe a field at a time; see {@link ClientThreadRunner}.
 	 */
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
-		if (GunnarsToolsConfig.GROUP.equals(event.getGroup()))
+		if (!GunnarsToolsConfig.GROUP.equals(event.getGroup())
+			|| GunnarsToolsConfig.ARCHIVE.equals(event.getKey()))
 		{
-			rebuildPlan();
+			return;
 		}
+
+		final boolean forgetEverything =
+			GunnarsToolsConfig.REMEMBER_BETWEEN_SESSIONS.equals(event.getKey())
+				&& !config.rememberBetweenSessions();
+
+		clientThread.run(() ->
+		{
+			if (forgetEverything)
+			{
+				// The setting doubles as the reset, which is stated in its own
+				// description. Both halves are needed: the in-memory copy is what the
+				// panel reads, and the stored string is what the next session reads.
+				archive = new AmmoArchive();
+				configStore.write(GunnarsToolsConfig.ARCHIVE, "");
+			}
+
+			rebuildPlan();
+		});
 	}
 
 	/**
@@ -373,6 +494,59 @@ public class GunnarsToolsPlugin extends Plugin
 		}
 	}
 
+	/**
+	 * Shift-right-clicking a monster offers to plan the trip for it.
+	 *
+	 * <p>The one affordance that lets a player choose a monster they are not
+	 * fighting, which is the state they are in when the answer matters most — a
+	 * fresh task, a monster never killed, and a bank trip to pack for. Reading the
+	 * live NPC is also how the estimate gets its hitpoints without a bundled
+	 * monster table; see {@link FoughtNpc}.
+	 *
+	 * <p>Behind shift, because an entry on every monster's menu is clutter on
+	 * every monster's menu. {@link MenuAction#RUNELITE} is client-side: clicking it
+	 * writes two settings and sends nothing to the server, so none of
+	 * {@code AGENTS.md}'s menu restrictions are in play. Nothing existing is
+	 * removed or reordered either.
+	 */
+	@Subscribe
+	public void onMenuOpened(MenuOpened event)
+	{
+		if (!client.isKeyPressed(KeyCode.KC_SHIFT))
+		{
+			return;
+		}
+
+		for (MenuEntry entry : event.getMenuEntries())
+		{
+			final NPC npc = entry.getNpc();
+			if (npc == null)
+			{
+				continue;
+			}
+
+			final FoughtNpc chosen = FoughtNpc.of(npc.getIndex(), compositionOf(npc));
+			if (chosen == null)
+			{
+				continue;
+			}
+
+			// One entry per menu, not one per matching option. A monster with
+			// "Attack", "Examine" and a Slayer option would otherwise sprout three
+			// identical "Plan trip" lines.
+			//
+			// Through getMenu() rather than the Client overload of the same name,
+			// which 1.12.38 deprecates; the compiler says so with -Xlint:deprecation
+			// and this project builds clean without it.
+			client.getMenu().createMenuEntry(-1)
+				.setOption(PIN_OPTION)
+				.setTarget(entry.getTarget())
+				.setType(MenuAction.RUNELITE)
+				.onClick(clicked -> pin(chosen));
+			return;
+		}
+	}
+
 	@Subscribe
 	public void onGameStateChanged(GameStateChanged event)
 	{
@@ -387,6 +561,41 @@ public class GunnarsToolsPlugin extends Plugin
 		// about to be compared against an inventory rebuilt from scratch.
 		meter.invalidateBaseline();
 		attribution.reset();
+	}
+
+	/**
+	 * Pins a monster as the plan's subject, by writing the two settings that hold
+	 * it.
+	 *
+	 * <p>Two rather than one because they answer different questions. The visible
+	 * one is the name, so the settings panel shows what is pinned and blanking it
+	 * unpins; the hidden one is the identity — id, name and hitpoints — so a
+	 * monster pinned in the Wilderness is still plannable at a bank where nothing
+	 * of it is on screen, and so a monster that has never been killed still has
+	 * hitpoints to scale an estimate onto.
+	 *
+	 * <p>Package-private and taking a {@link FoughtNpc} rather than an NPC, so the
+	 * whole of it is reachable from a test. The six lines above that read the live
+	 * client are not, and that is the split every event handler in this class
+	 * keeps.
+	 */
+	void pin(FoughtNpc npc)
+	{
+		final PlanTarget pinned = PlanTarget.of(npc, PlanTarget.Source.PINNED);
+		if (pinned == null)
+		{
+			return;
+		}
+
+		log.debug("pinning {}", pinned);
+		configStore.write(GunnarsToolsConfig.PINNED_TARGET, pinned.format());
+		configStore.write(GunnarsToolsConfig.PLAN_FOR, pinned.getName());
+
+		// The writes above post ConfigChanged, which rebuilds — in production. This
+		// does not rely on that: a store is free to be asynchronous, and a pin that
+		// only took effect on the next kill would look broken in exactly the
+		// situation it exists for.
+		rebuildPlan();
 	}
 
 	/**
@@ -408,6 +617,10 @@ public class GunnarsToolsPlugin extends Plugin
 	 * whole of the teardown for this — there is no second piece of state to
 	 * forget to reset.
 	 *
+	 * <p>It is also where the worn equipment is read for the first time in a
+	 * session, so a plugin enabled mid-trip files its first kill under the setup
+	 * actually being worn rather than under "not read yet".
+	 *
 	 * <p>Along with the composition and hitsplat reads above, this is the part of
 	 * the plugin that cannot be exercised offline.
 	 */
@@ -419,6 +632,10 @@ public class GunnarsToolsPlugin extends Plugin
 			if (container != null)
 			{
 				meter.containerChanged(containerId, container.getItems());
+				if (containerId == InventoryID.WORN)
+				{
+					equip(Loadout.of(container.getItems()));
+				}
 			}
 		}
 	}
@@ -453,24 +670,118 @@ public class GunnarsToolsPlugin extends Plugin
 	}
 
 	/**
-	 * Rebuilds the cached projection for the monster last killed.
+	 * The player is wearing something different.
 	 *
-	 * <p>Package-private rather than private so the plugin test can drive it
-	 * without a game tick. The decisions inside it are all in
-	 * {@link TripPlanner}; what is here is the choice of subject and the caching.
+	 * <p>Nothing is discarded and nothing is reset. The ledger keys its records by
+	 * monster and setup, so the kills measured on the previous weapon stay exactly
+	 * where they were and are picked up again the moment it is re-equipped — which
+	 * is what makes a special attack, or dying and re-gearing, cost nothing here.
+	 * See {@link AmmoLedger}.
+	 *
+	 * <p>Package-private so a test can drive it without an equipment container.
 	 */
-	void rebuildPlan()
+	void equip(Loadout loadout)
 	{
-		final NpcAmmoRecord subject = ledger.getMostRecentKill();
-		if (subject == null)
+		if (loadout.equals(ledger.getEquipped()))
 		{
-			clearPlan();
 			return;
 		}
 
-		planSubject = subject;
-		plan = TripPlanner.plan(subject, config.tripKills(), config.safetyMarginPercent());
-		withdrawals = TripPlanner.withdrawals(plan);
+		// The ledger is the only place the worn setup is kept. This class used to
+		// hold a copy of it and hand the same value to both, which was two fields
+		// that could only ever be equal and a way for a later edit to make them
+		// disagree — and they are compared against each other every time a record is
+		// filed under one and read back under the other.
+		log.debug("loadout {} -> {}", ledger.getEquipped(), loadout);
+		ledger.equipped(loadout);
+		rebuildPlan();
+	}
+
+	/**
+	 * Folds a monster into the archive and writes it out.
+	 *
+	 * <p>{@link AmmoLedger#bestFor(int)} rather than the record this kill just
+	 * touched, because the archive keeps one entry per monster and the record a
+	 * kill touched is the record for whatever was equipped at the instant the
+	 * monster died. A special attack landing the killing blow would otherwise
+	 * replace a three-hundred-kill entry with a one-kill one.
+	 *
+	 * <p><b>And the same comparison has to reach across the restart, which is the
+	 * half a review found missing.</b> {@code bestFor} only sees this session, so
+	 * with the intra-session guard alone the first kill of session two replaced a
+	 * three-hundred-monster entry with a one-kill record and the history was gone
+	 * for good — the archive could never hold more than the current session had
+	 * got to, which is the exact failure the guard was written to prevent, arrived
+	 * at through the door it was not watching.
+	 *
+	 * <p>So a stored entry is only replaced by something at least as well
+	 * evidenced. The exception is a change of setup: an entry measured on a
+	 * different weapon is not a better reading of the weapon in hand however many
+	 * monsters stand behind it, and the newest reading is the one most likely to
+	 * describe the player as they are now.
+	 */
+	private void remember(int npcId)
+	{
+		if (!config.rememberBetweenSessions())
+		{
+			return;
+		}
+
+		final NpcAmmoRecord best = ledger.bestFor(npcId);
+		if (best == null)
+		{
+			return;
+		}
+
+		final AmmoArchive.Entry stored = archive.get(npcId);
+		if (stored != null
+			&& stored.getMonsters() > best.getMonstersPriced()
+			&& !Loadout.knownToDiffer(stored.getLoadout(), best.getLoadout()))
+		{
+			return;
+		}
+
+		archive.remember(best, best.getLoadout());
+		configStore.write(GunnarsToolsConfig.ARCHIVE, archive.format());
+	}
+
+	/**
+	 * Rebuilds the cached answer: who the plan is about, and what it says.
+	 *
+	 * <p>Package-private rather than private so the plugin tests can drive it
+	 * without a game tick. The decisions inside it are all in {@link PlanTarget}
+	 * and {@link TripAdvisor}; what is here is the reading of the settings and the
+	 * caching.
+	 */
+	void rebuildPlan()
+	{
+		final String typed = config.planFor() == null ? "" : config.planFor().trim();
+
+		PlanTarget pinned = null;
+		if (!typed.isEmpty())
+		{
+			pinned = TripAdvisor.resolvePin(typed, PlanTarget.parse(config.pinnedTarget()),
+				attribution.getOwner(), ledger, archive);
+
+			if (pinned == null)
+			{
+				// Deliberately not a fallback. A name that matches nothing is a
+				// mistake the player can fix in one edit, and quietly planning for a
+				// different monster under the name they chose is the worst of the
+				// available behaviours: it is wrong and it looks right.
+				adviceOwner = attribution.getOwner();
+				adviceLastKill = ledger.getMostRecentKill();
+				advice = TripAdvice.waitingFor(null, TripAdvice.Waiting.UNKNOWN_MONSTER);
+				return;
+			}
+		}
+
+		adviceOwner = attribution.getOwner();
+		adviceLastKill = ledger.getMostRecentKill();
+
+		final PlanTarget target = PlanTarget.resolve(pinned, adviceOwner, adviceLastKill);
+		advice = TripAdvisor.advise(target, ledger, archive, ledger.getEquipped(), config.tripKills(),
+			config.safetyMarginPercent(), config.estimateBeforeMeasuring());
 	}
 
 	/**
@@ -481,50 +792,94 @@ public class GunnarsToolsPlugin extends Plugin
 	 * one that spells out which denominator and how many samples. It lives here
 	 * rather than in {@link #rebuildPlan()} because resolving an item id to a name
 	 * is a client read, and keeping every client read at the event edge is what
-	 * lets the projection be rebuilt in a test with no game running.
+	 * lets the answer be rebuilt in a test with no game running.
 	 */
-	private void logPlan()
+	private void logAdvice()
 	{
-		if (!log.isDebugEnabled() || plan.isEmpty() || planSubject == null)
+		if (!log.isDebugEnabled() || advice.getTarget() == null)
 		{
 			return;
 		}
-		final TripPlan headline = plan.get(0);
-		final ItemComposition composition = client.getItemDefinition(headline.getItemId());
-		log.debug("{}", headline.describe(planSubject.getNpcName(),
-			composition == null ? "item " + headline.getItemId() : composition.getName()));
+
+		final String monster = advice.getTarget().getName();
+		if (advice.isMeasured())
+		{
+			final TripPlan headline = advice.getMeasured().get(0);
+			log.debug("{}", headline.describe(monster, nameOf(headline.getItemId())));
+		}
+		else if (advice.isEstimated())
+		{
+			final ProjectedNeed headline = advice.getProjected().get(0);
+			log.debug("{}", headline.describe(monster, nameOf(headline.getItemId())));
+		}
+	}
+
+	private String nameOf(int itemId)
+	{
+		final ItemComposition composition = client.getItemDefinition(itemId);
+		return composition == null ? "item " + itemId : composition.getName();
 	}
 
 	private void clearPlan()
 	{
-		planSubject = null;
-		plan = Collections.emptyList();
-		withdrawals = Collections.emptyMap();
+		adviceOwner = null;
+		adviceLastKill = null;
+		advice = TripAdvice.waitingFor(null, TripAdvice.Waiting.A_TARGET);
 	}
 
-	/** The monster the panel and the bank highlight are about, or null for none. */
+	/** Everything the overlays draw. Never null. */
+	TripAdvice getAdvice()
+	{
+		return advice;
+	}
+
+	/**
+	 * What this session has measured about the monster the plan is about, on the
+	 * setup currently worn, or null when it has measured nothing.
+	 *
+	 * <p>Not the same question as "is the published answer a measurement". A record
+	 * can exist and still lose to a better-evidenced remembered figure; see
+	 * {@link TripAdvisor}. {@link TripAdvice#isMeasured()} is the one to ask about
+	 * what is on screen.
+	 */
 	@Nullable
 	NpcAmmoRecord getPlanSubject()
 	{
-		return planSubject;
+		final PlanTarget target = advice.getTarget();
+		return target == null ? null : ledger.get(target.getNpcId(), ledger.getEquipped());
 	}
 
-	/** What to bring, biggest first. Never null; empty before the first kill. */
+	/** What to bring, biggest first. Never null; empty when the answer is an estimate. */
 	List<TripPlan> getPlan()
 	{
-		return plan;
+		return advice.getMeasured();
 	}
 
-	/** Item id to quantity, for {@link BankWithdrawalOverlay}. */
+	/** Item id to quantity, for {@link BankWithdrawalOverlay}. Gross, never net. */
 	Map<Integer, Long> getWithdrawals()
 	{
-		return withdrawals;
+		return advice.getWithdrawals();
+	}
+
+	/**
+	 * What the player is already carrying of each metered item, for the bank
+	 * highlight's subtraction. Empty until the containers have been read once.
+	 */
+	Map<Integer, Long> getCarried()
+	{
+		return meter.getHoldings();
 	}
 
 	/** The session's measurements. Package-private; nothing outside reads it. */
 	AmmoLedger getLedger()
 	{
 		return ledger;
+	}
+
+	/** What previous sessions left. Package-private, for tests. */
+	AmmoArchive getArchive()
+	{
+		return archive;
 	}
 
 	/** Package-private, for {@code GunnarsToolsPluginLifecycleTest}. */
@@ -543,6 +898,26 @@ public class GunnarsToolsPlugin extends Plugin
 	GunnarsToolsConfig provideConfig(ConfigManager configManager)
 	{
 		return configManager.getConfig(GunnarsToolsConfig.class);
+	}
+
+	/**
+	 * The plugin's only writing path — see {@link ConfigStore} for why it goes
+	 * through an interface rather than straight at {@link ConfigManager}.
+	 */
+	@Provides
+	ConfigStore provideConfigStore(ConfigManager configManager)
+	{
+		return (key, value) -> configManager.setConfiguration(GunnarsToolsConfig.GROUP, key, value);
+	}
+
+	/**
+	 * How work that arrived on another thread gets back onto the client's — see
+	 * {@link ClientThreadRunner}.
+	 */
+	@Provides
+	ClientThreadRunner provideClientThreadRunner(ClientThread clientThread)
+	{
+		return clientThread::invoke;
 	}
 
 	/**

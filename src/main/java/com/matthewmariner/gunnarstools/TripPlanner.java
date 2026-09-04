@@ -94,4 +94,49 @@ public final class TripPlanner
 		}
 		return Collections.unmodifiableMap(out);
 	}
+
+	/**
+	 * The same lookup for an estimated trip.
+	 *
+	 * <p>A near-duplicate of the method above, and deliberately not unified with it
+	 * by a shared interface. {@link TripPlan} and {@link ProjectedNeed} are two
+	 * types on purpose — see {@link ProjectedNeed} — and a common supertype
+	 * introduced to save nine lines here would be a common supertype available
+	 * everywhere else, which is exactly the place a measured figure and a modelled
+	 * one get mixed up.
+	 */
+	public static Map<Integer, Long> projectedWithdrawals(List<ProjectedNeed> needs)
+	{
+		final Map<Integer, Long> out = new LinkedHashMap<>();
+		for (ProjectedNeed need : needs)
+		{
+			out.merge(need.getItemId(), need.getBring(), Long::sum);
+		}
+		return Collections.unmodifiableMap(out);
+	}
+
+	/**
+	 * How much of a requirement is still in the bank rather than on the player.
+	 *
+	 * <p>Six characters of arithmetic with two guards on it, kept here rather than
+	 * written inline in {@link BankWithdrawalOverlay} so that both guards have a
+	 * test. Saturating at zero is the one that matters: a player already carrying
+	 * more than the trip needs produces a negative, and a negative reaching the
+	 * highlight would either be drawn as a withdrawal quantity or, worse, compared
+	 * against the banked amount and painted red — telling somebody they are short
+	 * of an item they are carrying a surplus of.
+	 *
+	 * @param required what the trip needs in total, gross
+	 * @param carried  what the player already holds across inventory, worn
+	 *                 equipment and the quiver
+	 * @return what is left to withdraw, never negative
+	 */
+	public static long shortfall(long required, long carried)
+	{
+		if (carried <= 0L || required <= 0L)
+		{
+			return Math.max(0L, required);
+		}
+		return Math.max(0L, required - carried);
+	}
 }

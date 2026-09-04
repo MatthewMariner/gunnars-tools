@@ -45,8 +45,11 @@ public class GunnarsToolsPluginLifecycleTest
 	 */
 	private GunnarsToolsPlugin plugin()
 	{
+		final FakeConfig config = new FakeConfig();
 		final GunnarsToolsPlugin plugin = new GunnarsToolsPlugin();
-		plugin.config = new FakeConfig();
+		plugin.config = config;
+		plugin.configStore = config;
+		plugin.clientThread = Runnable::run;
 		plugin.overlayRegistry = overlays;
 		plugin.tripPanelOverlay = new TripPanelOverlay(plugin, plugin.config, null);
 		plugin.bankWithdrawalOverlay = new BankWithdrawalOverlay(plugin, plugin.config);
@@ -197,6 +200,46 @@ public class GunnarsToolsPluginLifecycleTest
 		assertTrue("a projection must not outlive its evidence", plugin.getPlan().isEmpty());
 		assertTrue(plugin.getWithdrawals().isEmpty());
 		assertNull(plugin.getPlanSubject());
+		assertNull("nor its subject", plugin.getAdvice().getTarget());
+		assertEquals("and it says so rather than going blank",
+			TripAdvice.Waiting.A_TARGET, plugin.getAdvice().getWaitingFor());
+	}
+
+	/**
+	 * The worn setup goes back to "not read yet", not to whatever was worn last
+	 * session.
+	 *
+	 * <p>A ledger that remembered the previous session's equipment would file the
+	 * first kill of the next one under gear the player may well have changed while
+	 * the plugin was off — and the whole reason records are keyed by setup is that
+	 * two setups never share a series.
+	 */
+	@Test
+	public void shutDownForgetsWhatWasBeingWorn()
+	{
+		GunnarsToolsPlugin plugin = plugin();
+		plugin.startUp();
+
+		plugin.equip(new Loadout(861, 892));
+		plugin.getLedger().apply(Attribution.kill(spindel(40), spent(30), 0));
+		assertEquals(new Loadout(861, 892), plugin.getLedger().getEquipped());
+
+		plugin.shutDown();
+
+		assertEquals(Loadout.UNKNOWN, plugin.getLedger().getEquipped());
+
+		// And the plugin's own copy, which is the half that has no getter and which
+		// a mutation pass caught the first version of this test missing entirely.
+		// The two are looked up against each other — a record is filed under the
+		// ledger's setup and read back under the plugin's — so a plugin that
+		// remembered a weapon its ledger had forgotten would search for a key that
+		// cannot exist and find a measurement it has for nothing.
+		plugin.startUp();
+		plugin.getLedger().apply(Attribution.kill(spindel(41), spent(30), 0));
+		plugin.rebuildPlan();
+
+		assertTrue("a fresh session files and reads under the same unknown setup",
+			plugin.getAdvice().isMeasured());
 	}
 
 	private static FoughtNpc spindel(int index)

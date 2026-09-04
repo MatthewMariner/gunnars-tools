@@ -1,6 +1,5 @@
 package com.matthewmariner.gunnarstools;
 
-import java.math.BigInteger;
 import java.util.Locale;
 import java.util.OptionalLong;
 
@@ -20,18 +19,13 @@ import java.util.OptionalLong;
  *
  * <h2>The arithmetic is exact integers, and that is not fussiness</h2>
  *
- * <p>{@code (long) Math.ceil(target * rate * (1 + margin))} is the obvious
- * spelling and it has two failure modes, both of which produce a number rather
- * than an error. Double multiplication loses exactness above 2<sup>53</sup>, and
- * the inputs get there: a single stack of coins is stackable and therefore
- * metered, so a record's gross total is not bounded by anything sensible.
- * Multiplying that by a trip size and a margin in {@code long} overflows into a
- * <em>negative</em> quantity to bring, which the bank highlight would then
- * silently decline to draw — a shortfall presented as "nothing needed".
- *
- * <p>So the ceiling is computed on {@link BigInteger} and saturated at
- * {@link Long#MAX_VALUE}. It runs once per kill and once per config change, not
- * once per frame, so the allocation costs nothing anybody can measure.
+ * <p>The ceiling is computed in exact integers and saturated at
+ * {@link Long#MAX_VALUE}, in {@link Scaling}, which is where the argument for
+ * doing it that way is written down. The short version: the obvious double
+ * multiply loses exactness on inputs this plugin really does see, and the
+ * obvious {@code long} multiply overflows into a <em>negative</em> quantity to
+ * bring — which the bank highlight would then silently decline to draw, showing
+ * a shortfall as "nothing needed".
  *
  * <h2>The safety margin is the dial, and there is deliberately no second one</h2>
  *
@@ -104,29 +98,15 @@ public final class TripPlan
 	/**
 	 * {@code ceil(quantity × targetMonsters × (100 + margin) / (over × 100))},
 	 * saturating at {@link Long#MAX_VALUE}.
+	 *
+	 * <p>The body moved to {@link Scaling} when {@link ProjectedNeed} needed the
+	 * same ceiling and the same overflow argument; the reasoning moved with it.
+	 * This stays as a named method because the two call sites above read as
+	 * arithmetic about a trip rather than about {@code BigInteger}.
 	 */
 	private static long scale(long quantity, int over, int targetMonsters, int marginPercent)
 	{
-		if (quantity <= 0L || over <= 0 || targetMonsters <= 0)
-		{
-			return 0L;
-		}
-
-		final BigInteger numerator = BigInteger.valueOf(quantity)
-			.multiply(BigInteger.valueOf(targetMonsters))
-			.multiply(BigInteger.valueOf(100L + marginPercent));
-		final BigInteger denominator = BigInteger.valueOf((long) over * 100L);
-
-		final BigInteger[] quotientAndRemainder = numerator.divideAndRemainder(denominator);
-		BigInteger quotient = quotientAndRemainder[0];
-		if (quotientAndRemainder[1].signum() != 0)
-		{
-			// Always up. Half an arrow short is a trip that ends one kill early.
-			quotient = quotient.add(BigInteger.ONE);
-		}
-
-		final BigInteger max = BigInteger.valueOf(Long.MAX_VALUE);
-		return quotient.compareTo(max) >= 0 ? Long.MAX_VALUE : quotient.longValue();
+		return Scaling.ceilScale(quantity, over, targetMonsters, marginPercent);
 	}
 
 	public ConsumptionEstimate getEstimate()

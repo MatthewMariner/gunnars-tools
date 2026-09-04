@@ -530,4 +530,68 @@ public class ConsumptionMeterTest
 		assertEquals(none, AmmoDelta.EMPTY.getConsumed().keySet());
 		assertEquals(none, AmmoDelta.EMPTY.getGained().keySet());
 	}
+
+	// --- what is being carried -------------------------------------------------
+
+	@Test
+	public void holdingsAreTheSumAcrossEveryTrackedContainer()
+	{
+		// The number the bank highlight subtracts. Reading one container would tell
+		// a player to withdraw the arrows already in their quiver.
+		ConsumptionMeter meter = meter();
+		meter.containerChanged(InventoryID.INV, items(ARROW, 100));
+		meter.containerChanged(InventoryID.WORN, items(ARROW, 50));
+		meter.containerChanged(InventoryID.DIZANAS_QUIVER_AMMO, items(ARROW, 900));
+		meter.tickEnded();
+
+		assertEquals(Long.valueOf(1050L), meter.getHoldings().get(ARROW));
+	}
+
+	@Test
+	public void holdingsAreEmptyUntilTheContainersHaveBeenRead()
+	{
+		// The honest answer: the plugin genuinely does not know what is being
+		// carried. Reporting zero would be the same value with a different meaning,
+		// and the highlight would tell the player to withdraw the whole trip twice.
+		ConsumptionMeter meter = meter();
+
+		assertTrue(meter.getHoldings().isEmpty());
+
+		meter.containerChanged(InventoryID.INV, items(ARROW, 100));
+		meter.tickEnded();
+		assertFalse(meter.getHoldings().isEmpty());
+
+		meter.invalidateBaseline();
+		assertTrue("and a login puts it back", meter.getHoldings().isEmpty());
+	}
+
+	@Test
+	public void holdingsFollowTheStackDown()
+	{
+		ConsumptionMeter meter = meter();
+		meter.containerChanged(InventoryID.INV, items(ARROW, 100));
+		meter.tickEnded();
+		meter.containerChanged(InventoryID.INV, items(ARROW, 60));
+		meter.tickEnded();
+
+		assertEquals(Long.valueOf(60L), meter.getHoldings().get(ARROW));
+	}
+
+	@Test
+	public void holdingsCannotBeEditedByWhoeverReadsThem()
+	{
+		ConsumptionMeter meter = meter();
+		meter.containerChanged(InventoryID.INV, items(ARROW, 100));
+		meter.tickEnded();
+
+		try
+		{
+			meter.getHoldings().put(ARROW, 1L);
+			org.junit.Assert.fail("an overlay must not be able to rewrite the meter");
+		}
+		catch (UnsupportedOperationException expected)
+		{
+			assertEquals(Long.valueOf(100L), meter.getHoldings().get(ARROW));
+		}
+	}
 }

@@ -14,29 +14,47 @@ import net.runelite.client.ui.overlay.components.LineComponent;
 import net.runelite.client.ui.overlay.components.TitleComponent;
 
 /**
- * The trip panel: what the monster you last killed costs, and what to bring.
+ * The trip panel: what the monster you are planning for costs, what to bring,
+ * and — when it cannot say yet — what it is waiting for.
  *
  * <p>Deliberately small. This is a utility with one question to answer, and a
  * panel that grows a row per column of the record would be a dashboard nobody
  * reads mid-fight. Three items at most, and the case it is built for — one
- * ammunition type, no area damage — is six lines including the header.
+ * ammunition type, no area damage — is seven lines including the header.
  *
- * <p><b>Six is the common case, not the ceiling, and this javadoc used to claim
- * otherwise.</b> Two lines an item is the floor: area damage adds a third to
+ * <p><b>Seven is the common case, not the ceiling, and this javadoc used to claim
+ * six was.</b> Two lines an item is the floor: area damage adds a third to
  * every item, an item spent on only some of the kills adds a fourth saying so,
  * and the spread and the ninetieth-percentile total add one each to the first
- * item. Replaying the predicates below, the two-item looting-bag record is nine
- * lines, three items under area damage is fourteen, and fifteen is the most they
+ * item. Replaying the predicates below, the two-item looting-bag record is ten
+ * lines, three items under area damage is fifteen, and sixteen is the most they
  * can produce. The cap that is actually enforced is {@link #MAX_ITEM_LINES},
  * which counts items rather than lines — because every line past the first two
  * is a disclosure, and trimming a disclosure to hit a line budget is what
- * {@link TripPlanner}'s javadoc refuses on the same grounds.
+ * {@link TripPlanner}'s javadoc refuses on the same grounds. The estimated panel
+ * is shorter at every size: an estimate has no spread and no percentile to show,
+ * so its worst case is eleven.
  *
- * <p>It decides nothing. Every number on it comes off a {@link TripPlan} that
- * was computed once, at the kill that produced it or at the config change that
- * invalidated it — never here. {@code AGENTS.md} is explicit that overlay work
- * runs every frame and has to stay minimal, and there is a second reason on top
- * of the cost: an overlay cannot be exercised without a running client, so
+ * <h2>An empty panel and a broken plugin used to be the same picture</h2>
+ *
+ * <p>This returned null whenever it had nothing to draw, and "nothing" covered a
+ * plugin that had never been fed a monster, one waiting on a first kill, one
+ * whose target's hitpoints did not resolve, and a name in the settings that
+ * matched no monster at all. Four problems, four fixes, one blank corner of the
+ * screen. So the panel now draws its own reason, out of
+ * {@link TripAdvice.Waiting}, which is a field on the answer rather than a
+ * sentence composed here — an overlay cannot be exercised without a client, and a
+ * sentence written inside one is a sentence no test can read.
+ *
+ * <p><b>An estimate is never allowed to look like a measurement.</b> The heading
+ * line says which it is, in colour, above every number; the source line under
+ * each item says what it was derived from. See {@link ProjectedNeed}.
+ *
+ * <p>It decides nothing else. Every number on it comes off a {@link TripAdvice}
+ * that was computed once, at the kill that produced it or at the config change
+ * that invalidated it — never here. {@code AGENTS.md} is explicit that overlay
+ * work runs every frame and has to stay minimal, and there is a second reason on
+ * top of the cost: an overlay cannot be exercised without a running client, so
  * anything decided in one is a decision no test can reach.
  *
  * <p>The one lookup it does make per frame is the item name, out of
@@ -59,6 +77,9 @@ class TripPanelOverlay extends OverlayPanel
 	private static final Color FAIR_COLOUR = new Color(0xCD, 0xDC, 0x39);
 	private static final Color THIN_COLOUR = new Color(0xFF, 0x98, 0x00);
 	private static final Color ANECDOTAL_COLOUR = new Color(0xF4, 0x43, 0x36);
+
+	/** The estimate heading and the waiting lines. Not one of the confidence colours. */
+	private static final Color CAVEAT_COLOUR = new Color(0xFF, 0xC1, 0x07);
 
 	private final GunnarsToolsPlugin plugin;
 	private final GunnarsToolsConfig config;
@@ -83,21 +104,71 @@ class TripPanelOverlay extends OverlayPanel
 			return null;
 		}
 
-		final NpcAmmoRecord subject = plugin.getPlanSubject();
-		final List<TripPlan> plans = plugin.getPlan();
-		if (subject == null || plans.isEmpty())
-		{
-			// Nothing measured yet. An empty panel is worse than no panel: it takes
-			// up the corner and says nothing.
-			return null;
-		}
-
+		final TripAdvice advice = plugin.getAdvice();
 		getPanelComponent().getChildren().clear();
 
+		final PlanTarget target = advice.getTarget();
 		getPanelComponent().getChildren().add(TitleComponent.builder()
-			.text(subject.getNpcName())
+			.text(target == null ? "Gunnar's Tools" : target.getName())
 			.build());
 
+		if (advice.getWaitingFor() != TripAdvice.Waiting.NOTHING)
+		{
+			drawWaiting(advice);
+			return super.render(graphics);
+		}
+
+		drawSubject(target);
+
+		if (advice.isMeasured())
+		{
+			drawMeasured(advice.getMeasured());
+		}
+		else
+		{
+			drawEstimated(advice.getProjected());
+		}
+
+		return super.render(graphics);
+	}
+
+	/**
+	 * Why there is no answer, in two short lines.
+	 *
+	 * <p>Both come off {@link TripAdvice.Waiting} rather than being written here.
+	 * Drawn in the caveat colour so a panel that is waiting cannot be skimmed as a
+	 * panel that is answering.
+	 */
+	private void drawWaiting(TripAdvice advice)
+	{
+		getPanelComponent().getChildren().add(LineComponent.builder()
+			.left(advice.getWaitingFor().getHeadline())
+			.leftColor(CAVEAT_COLOUR)
+			.build());
+		getPanelComponent().getChildren().add(LineComponent.builder()
+			.left(advice.getWaitingFor().getDetail())
+			.build());
+	}
+
+	/**
+	 * Who the plan is about and how it came to be about them.
+	 *
+	 * <p>The word matters at a bank, where "pinned" and "last kill" are the
+	 * difference between a plan for the task you are starting and a plan for the
+	 * one you just finished. The hitpoints are shown when they resolved, because
+	 * they are what an estimate is stretched onto and a reader who can see them can
+	 * see whether the stretch is reasonable.
+	 */
+	private void drawSubject(PlanTarget target)
+	{
+		getPanelComponent().getChildren().add(LineComponent.builder()
+			.left(target.getSource().getLabel())
+			.right(target.hasHitpoints() ? target.getHitpoints() + " hp" : "hp unknown")
+			.build());
+	}
+
+	private void drawMeasured(List<TripPlan> plans)
+	{
 		final TripPlan first = plans.get(0);
 		getPanelComponent().getChildren().add(LineComponent.builder()
 			.left("for " + format(first.getTargetMonsters()) + " kills")
@@ -173,8 +244,59 @@ class TripPanelOverlay extends OverlayPanel
 					.build());
 			}
 		}
+	}
 
-		return super.render(graphics);
+	/**
+	 * The estimated answer, headed by the word "estimate" in the caveat colour.
+	 *
+	 * <p>Every quantity is prefixed with a tilde. That is redundant next to the
+	 * heading, and it is redundant on purpose: the heading scrolls off the top of a
+	 * reader's attention and the number does not, and a screenshot cropped to the
+	 * numbers is how a wrong figure gets quoted back at somebody.
+	 */
+	private void drawEstimated(List<ProjectedNeed> needs)
+	{
+		final ProjectedNeed first = needs.get(0);
+
+		getPanelComponent().getChildren().add(LineComponent.builder()
+			.left("estimate")
+			.right("not measured")
+			.leftColor(CAVEAT_COLOUR)
+			.rightColor(CAVEAT_COLOUR)
+			.build());
+
+		getPanelComponent().getChildren().add(LineComponent.builder()
+			.left("for " + format(first.getTargetMonsters()) + " kills")
+			.right("+" + first.getSafetyMarginPercent() + "%")
+			.build());
+
+		final int lines = Math.min(MAX_ITEM_LINES, needs.size());
+		for (int i = 0; i < lines; i++)
+		{
+			final ProjectedNeed need = needs.get(i);
+
+			getPanelComponent().getChildren().add(LineComponent.builder()
+				.left(nameOf(need.getItemId()))
+				.right("~" + format(need.getBring()))
+				.build());
+
+			getPanelComponent().getChildren().add(LineComponent.builder()
+				.left("  " + need.getBasis().getLabel())
+				.right("n=" + need.getSourceMonsters() + " " + need.getConfidence().getLabel())
+				.rightColor(colourOf(need.getConfidence()))
+				.build());
+
+			// Only for a stretched figure, and only on the first item: how far it was
+			// stretched is the one thing a reader needs to judge it, and it is the
+			// same for every item in the list.
+			if (i == 0 && need.getBasis() == ProjectedNeed.Basis.SCALED_BY_HITPOINTS)
+			{
+				getPanelComponent().getChildren().add(LineComponent.builder()
+					.left("  " + need.getSourceName())
+					.right(need.getSourceHitpoints() + " -> " + need.getTargetHitpoints() + " hp")
+					.build());
+			}
+		}
 	}
 
 	private String nameOf(int itemId)

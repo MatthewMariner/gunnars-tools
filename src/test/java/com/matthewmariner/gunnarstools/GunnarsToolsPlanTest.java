@@ -36,6 +36,8 @@ public class GunnarsToolsPlanTest
 	{
 		GunnarsToolsPlugin plugin = new GunnarsToolsPlugin();
 		plugin.config = config;
+		plugin.configStore = config;
+		plugin.clientThread = Runnable::run;
 		plugin.overlayRegistry = new RecordingOverlays();
 		plugin.tripPanelOverlay = new TripPanelOverlay(plugin, config, null);
 		plugin.bankWithdrawalOverlay = new BankWithdrawalOverlay(plugin, config);
@@ -249,12 +251,13 @@ public class GunnarsToolsPlanTest
 	@Test
 	public void aTickWithNoKillInItLeavesTheCachedPlanObjectsWhereTheyWere()
 	{
-		// The guard that only rebuilds on a kill is a performance one, and a
-		// performance guard is invisible to a test that only reads values: rebuild
-		// unconditionally and the numbers come out identical, sixty times a minute,
-		// having sorted every sample series to get there. So what is asserted is
-		// the identity of the cached objects — a rebuild replaces them, and nothing
-		// short of a kill is allowed to.
+		// The guard that only rebuilds on a kill or a change of subject is a
+		// performance one, and a performance guard is invisible to a test that only
+		// reads values: rebuild unconditionally and the numbers come out identical,
+		// sixty times a minute, having sorted every sample series to get there. So
+		// what is asserted is the identity of the cached objects — a rebuild
+		// replaces them, and a tick that moved nothing the answer depends on is not
+		// allowed to.
 		GunnarsToolsPlugin plugin = plugin();
 		config.withTripKills(100).withSafetyMargin(0);
 		FoughtNpc target = npc(40, SPINDEL, "Spindel");
@@ -265,16 +268,23 @@ public class GunnarsToolsPlanTest
 		plugin.getAttribution().npcDied(target);
 		assertTrue(plugin.tickEnded(spent(ARROW, 20)));
 
+		// Engaging the next monster is a change of subject — from "the Spindel you
+		// last killed" to "the Spindel you are fighting" — so it is allowed to
+		// rebuild, and the objects are captured on the far side of it. Capturing
+		// before would be asserting that a target change does nothing, which is the
+		// opposite of what this plugin is now for.
+		FoughtNpc next = npc(41, SPINDEL, "Spindel");
+		plugin.getAttribution().interacting(next);
+		plugin.tickEnded(AmmoDelta.EMPTY);
+
 		final List<TripPlan> planned = plugin.getPlan();
 		final Map<Integer, Long> withdrawals = plugin.getWithdrawals();
 		assertEquals(Long.valueOf(2000L), withdrawals.get(ARROW));
 
-		// A second fight that produces an unattributed death and nothing else —
-		// the shape the comment at the guard names as not worth a rebuild.
-		FoughtNpc next = npc(41, SPINDEL, "Spindel");
+		// An unattributed death and nothing else — the shape the comment at the
+		// guard names as not worth a rebuild. The subject does not move: the player
+		// is still fighting the same monster they were.
 		FoughtNpc bystander = npc(42, SPINDEL, "Spindel");
-		plugin.getAttribution().interacting(next);
-		plugin.tickEnded(AmmoDelta.EMPTY);
 		plugin.getAttribution().damagedByMe(next);
 		plugin.getAttribution().damagedByMe(bystander);
 		plugin.getAttribution().npcDied(bystander);
@@ -282,6 +292,28 @@ public class GunnarsToolsPlanTest
 
 		assertSame("the plan was not rebuilt", planned, plugin.getPlan());
 		assertSame("nor was the bank lookup", withdrawals, plugin.getWithdrawals());
+	}
+
+	@Test
+	public void engagingADifferentMonsterRepointsThePlanWithoutAKill()
+	{
+		// The other half of the guard above, and the fix for the complaint that
+		// started this work: the plugin used to be able to say nothing at all about
+		// a monster until it had watched one die. Clicking on one is enough.
+		GunnarsToolsPlugin plugin = plugin();
+		config.withTripKills(100).withSafetyMargin(0);
+
+		plugin.getLedger().apply(Attribution.kill(npc(40, SPINDEL, "Spindel"), spent(20), 0));
+		plugin.rebuildPlan();
+		assertEquals(SPINDEL, plugin.getAdvice().getTarget().getNpcId());
+		assertEquals(PlanTarget.Source.LAST_KILL, plugin.getAdvice().getTarget().getSource());
+
+		plugin.getAttribution().interacting(npc(41, CALLISTO, "Callisto"));
+		assertFalse("no kill happened", plugin.tickEnded(AmmoDelta.EMPTY));
+
+		assertEquals("the plan follows what is in front of the player",
+			CALLISTO, plugin.getAdvice().getTarget().getNpcId());
+		assertEquals(PlanTarget.Source.FIGHTING, plugin.getAdvice().getTarget().getSource());
 	}
 
 	@Test

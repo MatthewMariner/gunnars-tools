@@ -95,6 +95,20 @@ public final class ConsumptionMeter
 	 */
 	private Map<Integer, Long> baseline;
 
+	/**
+	 * {@link #baseline} wrapped for {@link #getHoldings()}, rebuilt only when the
+	 * baseline is.
+	 *
+	 * <p>A second field for one wrapper looks like premature tidiness and is not.
+	 * The bank highlight asks for this once per visible item per frame, and a full
+	 * bank tab is around three hundred and fifty items — wrapping on each call
+	 * would be a few hundred throwaway objects a frame for a map that changes once
+	 * a tick at most. {@code AGENTS.md} is explicit that per-frame work stays
+	 * minimal. Both fields are assigned in {@link #publishBaseline}, and nowhere
+	 * else, so they cannot drift apart.
+	 */
+	private Map<Integer, Long> holdings = Collections.emptyMap();
+
 	/** Whether any tracked container changed since the last {@link #tickEnded()}. */
 	private boolean dirty;
 
@@ -178,7 +192,7 @@ public final class ConsumptionMeter
 
 		if (baseline == null)
 		{
-			baseline = combined;
+			publishBaseline(combined);
 			return AmmoDelta.EMPTY;
 		}
 
@@ -206,7 +220,7 @@ public final class ConsumptionMeter
 			}
 		}
 
-		baseline = combined;
+		publishBaseline(combined);
 
 		if (consumed.isEmpty() && gained.isEmpty())
 		{
@@ -227,8 +241,20 @@ public final class ConsumptionMeter
 	public void invalidateBaseline()
 	{
 		snapshots.clear();
-		baseline = null;
+		publishBaseline(null);
 		dirty = false;
+	}
+
+	/**
+	 * The only place {@link #baseline} is assigned, so its published view cannot
+	 * describe a state it was never in.
+	 */
+	private void publishBaseline(Map<Integer, Long> combined)
+	{
+		baseline = combined;
+		holdings = combined == null
+			? Collections.emptyMap()
+			: Collections.unmodifiableMap(combined);
 	}
 
 	/** Symmetric with construction: leaves nothing behind for {@code shutDown()}. */
@@ -241,6 +267,30 @@ public final class ConsumptionMeter
 	boolean hasBaseline()
 	{
 		return baseline != null;
+	}
+
+	/**
+	 * Everything the player is holding of a metered item, as of the last tick that
+	 * produced a diff.
+	 *
+	 * <p>This is the baseline under a different name, and it is already exactly the
+	 * right number: it sums inventory, worn equipment and the quiver, filtered to
+	 * the items this plugin meters. The bank highlight subtracts it to turn "what
+	 * the trip needs" into "what is left to withdraw", which is the question
+	 * somebody standing at a bank is actually asking.
+	 *
+	 * <p>An unmodifiable view rather than a copy, built once when the baseline is
+	 * and not on each call — see {@link #holdings}. The map behind it is replaced
+	 * wholesale on each diff and never mutated afterwards, so a caller holding this
+	 * sees a consistent tick rather than a half-written one.
+	 *
+	 * @return empty before the first tick after a login, and after
+	 * {@link #invalidateBaseline()} — which is the correct answer in both cases,
+	 * since the plugin genuinely does not know what is being carried
+	 */
+	public Map<Integer, Long> getHoldings()
+	{
+		return holdings;
 	}
 
 	private Map<Integer, Long> combine()

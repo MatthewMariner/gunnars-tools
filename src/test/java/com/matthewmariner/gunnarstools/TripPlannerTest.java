@@ -148,6 +148,83 @@ public class TripPlannerTest
 		assertEquals(Long.valueOf(3500L), withdrawals.get(ARROW));
 	}
 
+	@Test
+	public void theEstimatedLookupIsTheSameLookupOverTheOtherType()
+	{
+		List<ProjectedNeed> needs = Arrays.asList(
+			ProjectedNeed.remembered(ARROW, 100L, 4, "Spindel", true, 100, 0),
+			ProjectedNeed.remembered(BLOOD_RUNE, 16L, 4, "Spindel", true, 100, 0));
+
+		Map<Integer, Long> withdrawals = TripPlanner.projectedWithdrawals(needs);
+
+		assertEquals(Long.valueOf(2500L), withdrawals.get(ARROW));
+		assertEquals(Long.valueOf(400L), withdrawals.get(BLOOD_RUNE));
+		assertEquals(Arrays.asList(ARROW, BLOOD_RUNE),
+			new java.util.ArrayList<>(withdrawals.keySet()));
+	}
+
+	@Test
+	public void twoEstimatedLinesForOneItemAreAddedRatherThanOverwritten()
+	{
+		Map<Integer, Long> withdrawals = TripPlanner.projectedWithdrawals(Arrays.asList(
+			ProjectedNeed.remembered(ARROW, 100L, 4, "Spindel", true, 100, 0),
+			ProjectedNeed.remembered(ARROW, 100L, 4, "Spindel", true, 40, 0)));
+
+		assertEquals(Long.valueOf(3500L), withdrawals.get(ARROW));
+	}
+
+	@Test
+	public void anEmptyEstimatedListIsAnEmptyLookup()
+	{
+		assertTrue(TripPlanner.projectedWithdrawals(Collections.emptyList()).isEmpty());
+	}
+
+	// --- what is left to withdraw ---------------------------------------------
+
+	@Test
+	public void whatIsAlreadyCarriedComesOffTheRequirement()
+	{
+		assertEquals(1200L, TripPlanner.shortfall(2000L, 800L));
+	}
+
+	@Test
+	public void carryingTheWholeTripLeavesNothingToWithdraw()
+	{
+		assertEquals(0L, TripPlanner.shortfall(2000L, 2000L));
+	}
+
+	@Test
+	public void carryingMoreThanTheTripNeedsIsNotANegativeWithdrawal()
+	{
+		// The guard that matters. A negative reaching the highlight would either be
+		// drawn as a quantity or compared against the banked amount and painted red,
+		// telling somebody they are short of an item they have a surplus of.
+		assertEquals(0L, TripPlanner.shortfall(2000L, 5000L));
+	}
+
+	@Test
+	public void carryingNothingLeavesTheRequirementAlone()
+	{
+		assertEquals(2000L, TripPlanner.shortfall(2000L, 0L));
+		assertEquals("and a nonsensical negative holding does not inflate it",
+			2000L, TripPlanner.shortfall(2000L, -50L));
+	}
+
+	@Test
+	public void aRequirementOfNothingStaysNothing()
+	{
+		assertEquals(0L, TripPlanner.shortfall(0L, 800L));
+		assertEquals(0L, TripPlanner.shortfall(-5L, 800L));
+	}
+
+	@Test
+	public void aSaturatedRequirementIsNotUnderflowedByASmallHolding()
+	{
+		// The plan saturates at Long.MAX_VALUE rather than wrapping, so the
+		// subtraction has to stay in range too.
+		assertEquals(Long.MAX_VALUE - 1L, TripPlanner.shortfall(Long.MAX_VALUE, 1L));
+	}
+
 	private static KillSamples singleSample(long value)
 	{
 		KillSamples samples = new KillSamples();

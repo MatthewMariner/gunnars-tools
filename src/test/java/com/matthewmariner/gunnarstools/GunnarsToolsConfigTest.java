@@ -40,8 +40,42 @@ public class GunnarsToolsConfigTest
 	{
 		assertEquals("tripKills", GunnarsToolsConfig.TRIP_KILLS);
 		assertEquals("safetyMarginPct", GunnarsToolsConfig.SAFETY_MARGIN);
+		assertEquals("planFor", GunnarsToolsConfig.PLAN_FOR);
+		assertEquals("estimateBeforeMeasuring", GunnarsToolsConfig.ESTIMATE_BEFORE_MEASURING);
+		assertEquals("rememberBetweenSessions", GunnarsToolsConfig.REMEMBER_BETWEEN_SESSIONS);
+		assertEquals("subtractCarried", GunnarsToolsConfig.SUBTRACT_CARRIED);
 		assertEquals("showOverlay", GunnarsToolsConfig.SHOW_OVERLAY);
 		assertEquals("highlightBank", GunnarsToolsConfig.HIGHLIGHT_BANK);
+	}
+
+	@Test
+	public void theTwoKeysThePluginWritesForItselfArePermanentAsWell()
+	{
+		// More so, if anything. A renamed dial resets a setting the user can put
+		// back in one click; a renamed archive key silently throws away every
+		// monster they have measured, and nothing tells them it happened.
+		assertEquals("pinnedTarget", GunnarsToolsConfig.PINNED_TARGET);
+		assertEquals("archive", GunnarsToolsConfig.ARCHIVE);
+	}
+
+	@Test
+	public void noTwoKeysAreTheSameString()
+	{
+		// Two settings sharing a key is a single value read through two names, which
+		// looks like one of them not working.
+		java.util.Set<String> keys = new java.util.HashSet<>(java.util.Arrays.asList(
+			GunnarsToolsConfig.TRIP_KILLS,
+			GunnarsToolsConfig.SAFETY_MARGIN,
+			GunnarsToolsConfig.PLAN_FOR,
+			GunnarsToolsConfig.ESTIMATE_BEFORE_MEASURING,
+			GunnarsToolsConfig.REMEMBER_BETWEEN_SESSIONS,
+			GunnarsToolsConfig.SUBTRACT_CARRIED,
+			GunnarsToolsConfig.SHOW_OVERLAY,
+			GunnarsToolsConfig.HIGHLIGHT_BANK,
+			GunnarsToolsConfig.PINNED_TARGET,
+			GunnarsToolsConfig.ARCHIVE));
+
+		assertEquals(10, keys.size());
 	}
 
 	@Test
@@ -64,5 +98,37 @@ public class GunnarsToolsConfigTest
 
 		assertTrue(config.showOverlay());
 		assertTrue(config.highlightBank());
+	}
+
+	@Test
+	public void thePluginAnswersOutOfTheBoxRatherThanAfterBeingConfigured()
+	{
+		// All three default on, and all three for the same reason: the complaint
+		// that produced them was that the plugin said nothing until it had been
+		// used for a while, and a fix that has to be switched on is the same
+		// complaint with an extra step.
+		GunnarsToolsConfig config = new Defaults();
+
+		assertTrue("an estimate before the first kill is the whole cold start",
+			config.estimateBeforeMeasuring());
+		assertTrue("and the answer at a bank depends on the archive",
+			config.rememberBetweenSessions());
+		assertTrue("a bank number that ignores the inventory is a second trip's worth",
+			config.subtractCarried());
+	}
+
+	@Test
+	public void nothingIsPlannedForUntilTheUserSaysSo()
+	{
+		// Empty means "follow what I am fighting". A default monster name would be a
+		// bundled monster table with one row.
+		assertEquals("", new Defaults().planFor());
+	}
+
+	@Test
+	public void thePluginsOwnStateStartsEmpty()
+	{
+		assertEquals("", new Defaults().pinnedTarget());
+		assertEquals("", new Defaults().archive());
 	}
 }

@@ -49,6 +49,21 @@ import net.runelite.client.util.QuantityFormatter;
  * bank holds enough for the trip, red when it does not. That is a comparison of
  * two measured quantities, and it answers the question a player standing at the
  * bank is about to ask anyway.
+ *
+ * <h2>What is already on the player</h2>
+ *
+ * <p>With "Subtract what you carry" on, the number drawn is what is left to
+ * <em>withdraw</em> rather than what the trip needs in total — the arrows already
+ * in the inventory, the ammunition slot and the quiver come off first. That was a
+ * documented shortcoming of this overlay rather than a design choice: half a
+ * trip's ammunition is usually already on the player, and a highlight that
+ * ignores it asks them to withdraw a second trip's worth.
+ *
+ * <p>The subtraction itself is {@link TripPlanner#shortfall}, which is where its
+ * two guards have tests. What is here is the choice of which number to compare
+ * against the bank, and the decision not to draw at all when the answer is zero —
+ * the same rule this class already applied to a plan of zero, for the same
+ * reason: a highlight promising "withdraw 0" is worse than no highlight.
  */
 class BankWithdrawalOverlay extends WidgetItemOverlay
 {
@@ -90,8 +105,19 @@ class BankWithdrawalOverlay extends WidgetItemOverlay
 			return;
 		}
 
+		// Zero here is not the unreachable case above: a player carrying the whole
+		// trip's ammunition already produces it every time, and it is the correct
+		// answer — there is nothing to withdraw and therefore nothing to mark.
+		final long withdraw = config.subtractCarried()
+			? TripPlanner.shortfall(needed, plugin.getCarried().getOrDefault(itemId, 0L))
+			: needed;
+		if (withdraw <= 0L)
+		{
+			return;
+		}
+
 		final Rectangle bounds = itemWidget.getCanvasBounds();
-		final boolean enough = itemWidget.getQuantity() >= needed;
+		final boolean enough = itemWidget.getQuantity() >= withdraw;
 		final Color colour = enough ? ENOUGH : SHORT;
 
 		graphics.setColor(colour);
@@ -103,7 +129,7 @@ class BankWithdrawalOverlay extends WidgetItemOverlay
 		// is nonsense either way; rendering it as a negative would be nonsense that
 		// looks deliberate.
 		quantity.setText(QuantityFormatter.quantityToRSDecimalStack(
-			(int) Math.min(needed, Integer.MAX_VALUE)));
+			(int) Math.min(withdraw, Integer.MAX_VALUE)));
 		quantity.setColor(colour);
 		quantity.setPosition(new Point(bounds.x, bounds.y + bounds.height));
 		quantity.render(graphics);

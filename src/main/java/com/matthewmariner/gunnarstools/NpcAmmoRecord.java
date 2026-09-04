@@ -86,6 +86,18 @@ public final class NpcAmmoRecord
 	private final int npcId;
 	private final String npcName;
 
+	/**
+	 * The weapon and ammunition every sample in here was measured on.
+	 *
+	 * <p>Final, and that is the whole mechanism. {@link AmmoLedger} keys its
+	 * records by monster <em>and</em> loadout, so a record cannot come to hold
+	 * kills from two setups — the second setup gets a record of its own. Without
+	 * that, a rate measured on a magic shortbow and one measured on a dragon
+	 * hunter crossbow would land in the same series and average into a figure that
+	 * describes neither; see {@link Loadout}.
+	 */
+	private final Loadout loadout;
+
 	private int[] stats;
 	private boolean statsPopulated;
 
@@ -107,10 +119,11 @@ public final class NpcAmmoRecord
 	 */
 	private int pricedCoVictims;
 
-	NpcAmmoRecord(FoughtNpc npc)
+	NpcAmmoRecord(FoughtNpc npc, Loadout loadout)
 	{
 		this.npcId = npc.getId();
 		this.npcName = npc.getName();
+		this.loadout = loadout;
 		this.stats = npc.getStats();
 		this.statsPopulated = npc.hasStats();
 	}
@@ -298,6 +311,12 @@ public final class NpcAmmoRecord
 		return npcName;
 	}
 
+	/** The setup every sample in here was measured on. See {@link #loadout}. */
+	public Loadout getLoadout()
+	{
+		return loadout;
+	}
+
 	/**
 	 * @return whether the stats stored here are anything other than the cache's
 	 * all-ones default. See {@link FoughtNpc#hasStats()} — this is not the same
@@ -323,7 +342,7 @@ public final class NpcAmmoRecord
 	@Override
 	public String toString()
 	{
-		return "NpcAmmoRecord(" + npcName + " #" + npcId + ", kills=" + kills
+		return "NpcAmmoRecord(" + npcName + " #" + npcId + ", " + loadout + ", kills=" + kills
 			+ ", monstersPriced=" + getMonstersPriced()
 			+ ", consumed=" + lifetime.getConsumed()
 			+ ", recovered=" + lifetime.getGained()

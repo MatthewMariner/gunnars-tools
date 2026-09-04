@@ -11,7 +11,7 @@ It reads only your own inventory and equipment; nothing about anyone else.
 [![RuneLite](https://img.shields.io/badge/RuneLite-1.12.38-blue)](https://runelite.net)
 [![Java](https://img.shields.io/badge/Java-11-orange)](https://runelite.net)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-206-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-402-brightgreen)](#development)
 
 </div>
 
@@ -35,11 +35,12 @@ whose hitpoints differ by as much as a factor of 425: Krystilia's "spider" task
 alone runs from a plain Spider at 2 hp to Venenatis at 850. Reading the monster
 in front of you instead means there's nothing to get wrong.
 
-Once it has seen enough kills, an overlay panel says what a trip of N of that
-monster will cost, with a safety margin on top:
+An overlay panel says what a trip of N of that monster will cost, with a safety
+margin on top:
 
 ```
 Spindel
+last kill                  200 hp
 for 100 kills                +10%
 Rune arrow                  2,750
   25.0/kill           n=37 fair
@@ -61,20 +62,72 @@ above is priced per monster killed rather than per window. With no area damage
 the two are identical.
 
 The same figures also outline the items you need in the bank: green once you
-have enough, red if you don't.
+have enough, red if you don't. With **Subtract what you carry** on, the number
+over a bank slot is what's left to withdraw rather than what the whole trip
+needs.
 
-Not implemented, and deliberately: an estimate for a monster you've never
-fought, live Slayer task reading, or anything that survives a restart — see
-Known limitations.
+## Before you've killed one
+
+The first version of this plugin could only ever describe the last thing you'd
+watched die, which meant it said nothing at a bank with a fresh task — the one
+moment you actually want the answer. Three things fix that.
+
+**It plans for a monster you choose.** Shift-right-click any monster and pick
+**Plan trip**, or type its name into the *Plan for* setting. That outranks
+whatever you're fighting, which outranks whatever you killed last, and it sticks
+across a logout — so you can pin a monster out in the Wilderness and still have
+its numbers at the bank.
+
+**It remembers between sessions.** A compact summary of each monster — its
+setup, how many were priced, what they cost — lives in your RuneLite profile, so
+last week's trip answers today's question.
+
+**It estimates a monster you've never fought**, from one you have, scaled by the
+ratio of their hitpoints. Both of those are read off the live NPC, so nothing
+has to guess which of Krystilia's thirty-odd "spiders" she means.
+
+An estimate is never shown as a measurement. It says so on its own line, every
+number carries a `~`, and it names what it came from:
+
+```
+Venenatis
+fighting                   850 hp
+estimate             not measured
+Rune arrow                ~11,688
+  scaled              n=37 fair
+  Spindel          200 -> 850 hp
+```
+
+Read that as: 37 Spindels of 200 hitpoints cost 25 arrows each, and Venenatis is
+four and a quarter times the size. **That last step assumes your damage per shot
+is the same against both**, which isn't quite true — defence differs. It's the
+one figure here that rests on something other than arithmetic, which is why it's
+labelled, why the plugin picks the *closest* monster it has evidence for, and
+why both hitpoint figures are on screen. Turn **Estimate before measuring** off
+if you'd rather have nothing than that.
+
+And when it can't answer, it says which of the reasons applies — waiting for a
+monster, waiting for a kill, hitpoints that didn't resolve, or a name in
+*Plan for* that matches nothing:
+
+```
+Gunnar's Tools
+no monster yet
+attack or pin one
+```
 
 ## Settings
 
 | Setting | Default | What it does |
 |---|---|---|
 | Trip size | 100 | How many kills to plan for |
-| Safety margin | 10% | Extra padding added on top of the measured amount |
-| Show overlay panel | On | The per-monster panel described above |
-| Show bank highlight | On | The green/red outline in the bank |
+| Safety margin | 10% | Extra padding added on top of the figure |
+| Plan for | *(empty)* | The monster to plan for, by name. Empty follows what you're fighting; shift-right-click a monster and choose "Plan trip" to fill it in |
+| Estimate before measuring | On | Show an estimate for a monster you haven't killed yet, scaled from one you have. Always labelled as an estimate |
+| Remember between sessions | On | Keep a summary of what each monster cost, so there's an answer at the bank. Turning it off forgets what's stored |
+| Subtract what you carry | On | The bank highlight shows what's left to withdraw rather than what the trip needs in total |
+| Show the trip panel | On | The panel described above, including what it's waiting for |
+| Highlight in the bank | On | The green/red outline in the bank |
 
 The margin is the only dial that widens the answer, on purpose. Planning
 against your single worst kill instead of the average would triple what you
@@ -82,6 +135,12 @@ carry into a place where every surplus arrow is a gift to whoever kills you.
 Use the sample count and spread printed next to the figure to judge whether the
 default margin is wide enough — four kills wants a lot more padding than four
 hundred, and the plugin does not widen it for you.
+
+There's deliberately no "reset after a gear change" setting, which is the
+obvious thing to want. Measurements are already filed under the weapon and
+ammunition that produced them, so two setups never share an average and nothing
+ever has to be thrown away — swap to a special attack weapon and back and the
+series you were building carries straight on.
 
 ## Why
 
@@ -96,7 +155,9 @@ carrying less into the Wilderness is good regardless of which is true.)
 The governing decision is **measure, do not model**. Predicting consumption from
 accuracy, damage and attack speed produces error bars too wide to act on, and it
 silently ignores whatever your gear, prayers and boosts are actually doing.
-Watching the stack go down is automatically correct about all of it.
+Watching the stack go down is automatically correct about all of it. The one
+place that gets stretched is the hitpoints estimate above, and it's stretched
+from your own measurements, labelled as an estimate, and switchable off.
 
 ## Known limitations
 
@@ -127,16 +188,27 @@ Watching the stack go down is automatically correct about all of it.
   switch, and a shot fired the tick right after a kill is discarded entirely**
   rather than counted anywhere. Both understate cost slightly, and both come
   from the same cause: the game resolves deaths before it applies your click.
-- **Nothing survives a restart.** Kills, samples and the confidence word all
-  live in memory for the session — a trip planned in your first half hour is
-  planned off that half hour alone.
-- **The plan is only ever for the monster you killed most recently.** A task
-  that mixes species — a Wilderness "spider" task spans several — plans for
-  whichever you finished last; the other's numbers are still being kept, just
-  not shown.
-- **The bank highlight doesn't know what's already in your inventory.** It
-  compares the trip's requirement against what's banked, not against what
-  you're already carrying.
+- **Only the totals survive a restart, not the individual kills.** What's kept
+  is enough for a rate and not enough for a spread, which is why a restored
+  figure is an estimate: there's no honest way to call it measured without the
+  samples behind it. The moment this session has measured as many of that
+  monster *on the same setup*, the panel switches to the measurement — a stored
+  figure about a different weapon never outranks a live one about the weapon in
+  your hand, however many kills stands behind it.
+- **The hitpoints estimate assumes your damage per shot doesn't change between
+  monsters.** It does — defence differs, and so does whether a monster is weak
+  to your style. It's the reason that figure is labelled and the reason the
+  stretch is printed beside it.
+- **A gear change is only ever a change of weapon or ammunition.** Swapping
+  gloves, drinking a brew or turning a prayer on changes what a kill costs and
+  is invisible here, so a series can quietly straddle a change that mattered.
+- **Pinning needs the monster on screen, or a name you've already measured.**
+  There's no bundled monster list to pick from, on purpose — reading the live
+  NPC is what lets this plugin skip the whole problem of resolving "spider" to
+  one of thirty things.
+- **Your Slayer task isn't read.** Trip size is a number you set, not a count
+  remaining, and the monster is one you pin rather than one the task names — for
+  the same reason as above, since the task only ever names the umbrella.
 
 ## Found a bug?
 
@@ -151,12 +223,13 @@ its basis attached, and pasting a stretch of that log almost always settles it.
 
 ```bash
 ./gradlew build   # compile + package; also proves the JDK + wrapper work
-./gradlew test    # runs the 206-test JUnit suite
+./gradlew test    # runs the 402-test JUnit suite
 ./gradlew run     # launches a full RuneLite dev client with the plugin loaded
 ```
 
 Every decision here — kill attribution, consumption, the trip estimate and its
-order statistics, both overlays — runs with no game client at all.
+order statistics, the choice of what to say and what to wait for, the
+persistence format, both overlays — runs with no game client at all.
 
 **Every guard has been proven by breaking it.** 93 separate mutations have been
 applied to the shipped source one at a time — a ceiling turned into a floor, a
@@ -171,6 +244,29 @@ it copies, kept as a guard against reintroducing the ordering bug it fixed, with
 the reason written at that line. A later independent review ran eight more
 mutations; three survived and were fixed, and two more were probes that settled
 the target-switch question above into a pinned fact rather than a guess.
+
+Target selection, persistence and the estimate added 70 more, of which six came
+back green. One wasn't really a mutation — weakening the ledger key's equality
+while its hash still separated the keys changes no behaviour, and it went red as
+soon as both halves were cut. Four were real holes and are now tests: hitpoints
+reading as the cache's untouched `1` being scaled from anyway, twice over on
+both sides of the same filter; an estimate of zero reaching the panel; and a
+shutdown that emptied the ledger's idea of what was worn but not the plugin's.
+The sixth was a guard clause nothing noticed the loss of, because the arithmetic
+underneath already answered zero — deleted, with the reason left where it stood.
+
+A review of the finished work then found four things no mutation would have,
+because they were absent behaviour rather than undefended lines. The first kill
+of a session handed the archive a one-kill record and the archive replaced three
+hundred monsters with it, so the stored figure could never grow past whatever the
+current session had reached. A remembered figure measured on one weapon
+outnumbered and suppressed a live measurement of another — the averaging failure
+the whole gear story exists to prevent, reached from the far side. A pinned
+monster was stored under one spelling of its name and matched by another, so any
+name holding a separator stopped resolving after a restart. And a config change
+did its work on the Swing thread while the client thread was inserting into the
+maps it walked. All four are fixed, and the twelve mutations covering them are in
+the count above.
 
 Compile target is Java 11 bytecode. The RuneLite client version is pinned in
 `build.gradle` (1.12.38) rather than left on `latest.release`, so a local build
@@ -197,6 +293,12 @@ Reasoned from the API, not yet observed in game:
   rather than under the stack size the game already draws there;
 - that the panel stays legible mid-fight at up to fourteen lines, which is what
   a three-item area-damage record produces;
+- that shift-right-clicking a monster really does offer **Plan trip**, and that
+  clicking it sends nothing to the server;
+- that the weapon and ammunition slots of the worn-equipment container read the
+  way this plugin assumes, including with a Dizana's quiver equipped;
+- that writing the saved summary once per kill isn't noticeable — it goes
+  through RuneLite's own config store, which batches its own writes;
 - **whether the ammunition decrement for a shot lands on the same game tick as
   a target switch, or the tick after.** This is the one that decides whether the
   two leaks above exist at all, and it's pinned by tests rather than fixed on a

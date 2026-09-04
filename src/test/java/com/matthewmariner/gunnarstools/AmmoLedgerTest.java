@@ -25,6 +25,9 @@ public class AmmoLedgerTest
 
 	private static final int[] SPINDEL_STATS = {130, 130, 130, 200, 1, 130};
 
+	private static final Loadout SHORTBOW = new Loadout(861, 892);
+	private static final Loadout CROSSBOW = new Loadout(21902, 9144);
+
 	private static FoughtNpc spindel(int index)
 	{
 		return new FoughtNpc(index, SPINDEL, "Spindel", SPINDEL_STATS);
@@ -515,5 +518,168 @@ public class AmmoLedgerTest
 		window.add(new AmmoDelta(one(ARROW, 500), Collections.emptyMap()));
 
 		assertEquals(30.0d, ledger.get(SPINDEL).estimate(ARROW).getPerAttributedKill(), 1e-9d);
+	}
+
+	// --- one monster, two setups ----------------------------------------------
+
+	@Test
+	public void twoSetupsAreTwoRecordsRatherThanOneMixedAverage()
+	{
+		// Twenty-five arrows a Spindel is a fact about a shortbow. Averaging it with
+		// a crossbow's forty produces a figure that describes neither, and nothing
+		// on the panel would say so.
+		AmmoLedger ledger = new AmmoLedger();
+
+		ledger.equipped(SHORTBOW);
+		ledger.apply(Attribution.kill(spindel(40), spent(25), 0));
+
+		ledger.equipped(CROSSBOW);
+		ledger.apply(Attribution.kill(spindel(41), spent(40), 0));
+
+		assertEquals(2, ledger.size());
+		assertEquals(25.0d, ledger.get(SPINDEL, SHORTBOW).estimate(ARROW).getPerMonster(), 1e-9d);
+		assertEquals(40.0d, ledger.get(SPINDEL, CROSSBOW).estimate(ARROW).getPerMonster(), 1e-9d);
+	}
+
+	@Test
+	public void swappingBackResumesTheSeriesItLeft()
+	{
+		// The reason nothing is reset on a gear change. A special attack is a weapon
+		// change and so is dying in the Wilderness, so a plugin that cleared the
+		// session on either would throw away a long series because somebody speced a
+		// Callisto.
+		AmmoLedger ledger = new AmmoLedger();
+
+		ledger.equipped(SHORTBOW);
+		ledger.apply(Attribution.kill(spindel(40), spent(25), 0));
+		ledger.apply(Attribution.kill(spindel(41), spent(25), 0));
+
+		ledger.equipped(CROSSBOW);
+		ledger.apply(Attribution.kill(spindel(42), spent(9), 0));
+
+		ledger.equipped(SHORTBOW);
+		ledger.apply(Attribution.kill(spindel(43), spent(25), 0));
+
+		assertEquals("the shortbow series carried on where it stopped",
+			3, ledger.get(SPINDEL, SHORTBOW).getKills());
+		assertEquals(1, ledger.get(SPINDEL, CROSSBOW).getKills());
+	}
+
+	@Test
+	public void aRecordIsReadBackAgainstTheSetupCurrentlyWorn()
+	{
+		// The one-argument get() is "what have I measured with what is in my hands",
+		// which is the only question the panel can honestly answer with a
+		// measurement.
+		AmmoLedger ledger = new AmmoLedger();
+		ledger.equipped(SHORTBOW);
+		ledger.apply(Attribution.kill(spindel(40), spent(25), 0));
+
+		assertEquals(25.0d, ledger.get(SPINDEL).estimate(ARROW).getPerMonster(), 1e-9d);
+
+		ledger.equipped(CROSSBOW);
+		assertNull("a crossbow has measured nothing, however much the bow measured",
+			ledger.get(SPINDEL));
+	}
+
+	@Test
+	public void aRecordCarriesTheSetupItWasMeasuredOn()
+	{
+		AmmoLedger ledger = new AmmoLedger();
+		ledger.equipped(CROSSBOW);
+		ledger.apply(Attribution.kill(spindel(40), spent(40), 0));
+
+		assertEquals(CROSSBOW, ledger.get(SPINDEL).getLoadout());
+	}
+
+	@Test
+	public void theBestEvidencedRecordIsTheOneWorthKeeping()
+	{
+		// What the archive is fed. A single kill landing while a special attack
+		// weapon happened to be equipped must not replace a long series with a
+		// one-kill one and call it the newer reading.
+		AmmoLedger ledger = new AmmoLedger();
+
+		ledger.equipped(SHORTBOW);
+		for (int kill = 0; kill < 30; kill++)
+		{
+			ledger.apply(Attribution.kill(spindel(40 + kill), spent(25), 0));
+		}
+
+		ledger.equipped(CROSSBOW);
+		ledger.apply(Attribution.kill(spindel(90), spent(1), 0));
+
+		assertEquals(SHORTBOW, ledger.bestFor(SPINDEL).getLoadout());
+		assertEquals(30, ledger.bestFor(SPINDEL).getMonstersPriced());
+	}
+
+	@Test
+	public void aTieOnEvidenceGoesToTheNewerSetup()
+	{
+		// The same preference the archive states for the same reason: the newest
+		// reading is the one most likely to describe the player as they are now.
+		AmmoLedger ledger = new AmmoLedger();
+
+		ledger.equipped(SHORTBOW);
+		ledger.apply(Attribution.kill(spindel(40), spent(25), 0));
+		ledger.equipped(CROSSBOW);
+		ledger.apply(Attribution.kill(spindel(41), spent(40), 0));
+
+		assertEquals(CROSSBOW, ledger.bestFor(SPINDEL).getLoadout());
+	}
+
+	@Test
+	public void thereIsNoBestRecordForAMonsterNeverFought()
+	{
+		assertNull(new AmmoLedger().bestFor(SPINDEL));
+	}
+
+	@Test
+	public void aNameSearchAsksWhichMonsterRatherThanWhichMeasurement()
+	{
+		// Scoped to the worn setup at first, and a review was right that this
+		// conflates two questions. "Which monster does this name mean" is about
+		// identity — an id, a name and a hitpoints figure, all three properties of
+		// the monster and none of them of the bow. Scoping it meant that typing the
+		// name of something you had killed forty times an hour ago answered "no such
+		// monster" because you had since changed weapons.
+		AmmoLedger ledger = new AmmoLedger();
+		ledger.equipped(SHORTBOW);
+		ledger.apply(Attribution.kill(spindel(40), spent(25), 0));
+
+		assertEquals(SPINDEL, ledger.findByName("spindel").getNpcId());
+
+		ledger.equipped(CROSSBOW);
+		assertEquals("a weapon swap does not unname a monster",
+			SPINDEL, ledger.findByName("Spindel").getNpcId());
+
+		// The evidence question is still scoped, one layer up, and still answers
+		// nothing for a weapon that has measured nothing.
+		assertNull(ledger.get(SPINDEL));
+	}
+
+	@Test
+	public void aNameSearchThatMatchesNothingFindsNothing()
+	{
+		AmmoLedger ledger = new AmmoLedger();
+		ledger.equipped(SHORTBOW);
+		ledger.apply(Attribution.kill(spindel(40), spent(25), 0));
+
+		assertNull(ledger.findByName("Venenatis"));
+	}
+
+	@Test
+	public void clearForgetsWhatWasWornAsWellAsWhatWasMeasured()
+	{
+		// A ledger that remembered the last session's equipment would file the first
+		// kill of the next one under gear the player may well have changed while the
+		// plugin was off.
+		AmmoLedger ledger = new AmmoLedger();
+		ledger.equipped(SHORTBOW);
+		ledger.apply(Attribution.kill(spindel(40), spent(25), 0));
+
+		ledger.clear();
+
+		assertEquals(Loadout.UNKNOWN, ledger.getEquipped());
 	}
 }
