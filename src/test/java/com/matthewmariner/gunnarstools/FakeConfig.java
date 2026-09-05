@@ -29,6 +29,7 @@ final class FakeConfig implements GunnarsToolsConfig, ConfigStore
 	private boolean subtractCarried = GunnarsToolsConfig.super.subtractCarried();
 	private boolean showOverlay = GunnarsToolsConfig.super.showOverlay();
 	private boolean highlightBank = GunnarsToolsConfig.super.highlightBank();
+	private boolean showLookup = GunnarsToolsConfig.super.showLookup();
 	private String pinnedTarget = GunnarsToolsConfig.super.pinnedTarget();
 	private String archive = GunnarsToolsConfig.super.archive();
 
@@ -80,6 +81,12 @@ final class FakeConfig implements GunnarsToolsConfig, ConfigStore
 	public boolean highlightBank()
 	{
 		return highlightBank;
+	}
+
+	@Override
+	public boolean showLookup()
+	{
+		return showLookup;
 	}
 
 	@Override
@@ -170,6 +177,12 @@ final class FakeConfig implements GunnarsToolsConfig, ConfigStore
 	FakeConfig withHighlightBank(boolean highlight)
 	{
 		this.highlightBank = highlight;
+		return this;
+	}
+
+	FakeConfig withShowLookup(boolean show)
+	{
+		this.showLookup = show;
 		return this;
 	}
 

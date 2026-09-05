@@ -11,7 +11,7 @@ It reads only your own inventory and equipment; nothing about anyone else.
 [![RuneLite](https://img.shields.io/badge/RuneLite-1.12.38-blue)](https://runelite.net)
 [![Java](https://img.shields.io/badge/Java-11-orange)](https://runelite.net)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-402-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-496-brightgreen)](#development)
 
 </div>
 
@@ -19,9 +19,10 @@ It reads only your own inventory and equipment; nothing about anyone else.
 > **Not on the Plugin Hub yet.** Build and run it yourself — see
 > [Development](#development) below.
 
-<!-- SCREENSHOT: the overlay panel right after a kill, framed alongside the bank with its
-     highlighted withdraw quantities in the same shot. Save as docs/img/panel.png and
-     replace this comment with:  ![Panel and bank highlight](docs/img/panel.png) -->
+<!-- SCREENSHOT: the sidebar lookup open on a search for "spider", showing several
+     monsters at different hitpoints, with the overlay panel and the bank's highlighted
+     withdraw quantities in the same shot. Save as docs/img/panel.png and replace this
+     comment with:  ![Lookup, panel and bank highlight](docs/img/panel.png) -->
 
 ---
 
@@ -66,25 +67,75 @@ have enough, red if you don't. With **Subtract what you carry** on, the number
 over a bank slot is what's left to withdraw rather than what the whole trip
 needs.
 
+## Look a monster up by name
+
+Open the sidebar — the arrow icon appears the moment you enable the plugin —
+type a name, and pick the monster you mean. You never have to be standing next
+to it.
+
+```
+[ spider                    ]
+
+Spider                  2 hp
+Giant spider            5 hp
+Giant spider           32 hp
+Spindel               200 hp
+Venenatis             850 hp
+
+Spindel               200 hp
+for 100 kills            +10%
+Rune arrow              2,750
+measured             n=37 fair
+pinned                  clear
+```
+
+Pick one and the answer appears underneath it — the same figure the on-screen
+panel shows, minus the spread and the percentile, which are still over there.
+`clear` puts the plan back to following whatever you're fighting.
+
+That list is read out of **your own game cache** at startup — no download, no
+bundled monster table, no network. It takes about three seconds and then it is
+there for the session.
+
+The hitpoints beside every row are the whole reason it is a list rather than a
+box that guesses. Krystilia's "spider" task means all five of the monsters above,
+and they differ by a factor of 425; a lookup that picked one for you would be
+wrong most of the time and confident about it. Where several NPC ids share a name
+*and* a size — one monster placed in several regions — they fold into a single
+row that says how many, and picking it files the plan under whichever of them
+you've actually measured.
+
+Typing a name into the *Plan for* setting works the same way, with one
+difference: a settings field has nowhere to offer you a choice, so an umbrella
+name is reported rather than resolved.
+
+```
+Gunnar's Tools
+several monsters match
+pick one in the side panel
+```
+
 ## Before you've killed one
 
 The first version of this plugin could only ever describe the last thing you'd
 watched die, which meant it said nothing at a bank with a fresh task — the one
 moment you actually want the answer. Three things fix that.
 
-**It plans for a monster you choose.** Shift-right-click any monster and pick
-**Plan trip**, or type its name into the *Plan for* setting. That outranks
-whatever you're fighting, which outranks whatever you killed last, and it sticks
-across a logout — so you can pin a monster out in the Wilderness and still have
-its numbers at the bank.
+**It plans for a monster you choose.** Find it in the sidebar lookup above,
+shift-right-click one in the world and pick **Plan trip**, or type its name into
+the *Plan for* setting. That outranks whatever you're fighting, which outranks
+whatever you killed last, and it sticks across a logout — so you can choose a
+monster at a bank and still have its numbers when you get there.
 
 **It remembers between sessions.** A compact summary of each monster — its
 setup, how many were priced, what they cost — lives in your RuneLite profile, so
 last week's trip answers today's question.
 
 **It estimates a monster you've never fought**, from one you have, scaled by the
-ratio of their hitpoints. Both of those are read off the live NPC, so nothing
-has to guess which of Krystilia's thirty-odd "spiders" she means.
+ratio of their hitpoints. Both hitpoint figures come from the game's own data for
+the two specific monsters — the one in front of you, or the one you picked out of
+the lookup — so nothing has to guess which of Krystilia's thirty-odd "spiders"
+she means.
 
 An estimate is never shown as a measurement. It says so on its own line, every
 number carries a `~`, and it names what it came from:
@@ -122,12 +173,13 @@ attack or pin one
 |---|---|---|
 | Trip size | 100 | How many kills to plan for |
 | Safety margin | 10% | Extra padding added on top of the figure |
-| Plan for | *(empty)* | The monster to plan for, by name. Empty follows what you're fighting; shift-right-click a monster and choose "Plan trip" to fill it in |
+| Plan for | *(empty)* | The monster to plan for, by name. Empty follows what you're fighting; the sidebar lookup and the "Plan trip" right-click both fill it in for you |
 | Estimate before measuring | On | Show an estimate for a monster you haven't killed yet, scaled from one you have. Always labelled as an estimate |
 | Remember between sessions | On | Keep a summary of what each monster cost, so there's an answer at the bank. Turning it off forgets what's stored |
 | Subtract what you carry | On | The bank highlight shows what's left to withdraw rather than what the trip needs in total |
 | Show the trip panel | On | The panel described above, including what it's waiting for |
 | Highlight in the bank | On | The green/red outline in the bank |
+| Show the monster lookup | On | The sidebar panel for finding a monster by name. Off, the sidebar button goes away and *Plan for* goes back to matching only monsters this plugin has already seen |
 
 The margin is the only dial that widens the answer, on purpose. Planning
 against your single worst kill instead of the average would triple what you
@@ -202,13 +254,23 @@ from your own measurements, labelled as an estimate, and switchable off.
 - **A gear change is only ever a change of weapon or ammunition.** Swapping
   gloves, drinking a brew or turning a prayer on changes what a kill costs and
   is invisible here, so a series can quietly straddle a change that mattered.
-- **Pinning needs the monster on screen, or a name you've already measured.**
-  There's no bundled monster list to pick from, on purpose — reading the live
-  NPC is what lets this plugin skip the whole problem of resolving "spider" to
-  one of thirty things.
+- **The monster lookup is only as current as your game cache.** It is read from
+  the client's own files at startup, so it is right about the version you are
+  playing and says nothing about a monster added after your last update. It is
+  also read fresh every session rather than cached between them, for the same
+  reason. There is still no bundled monster list, on purpose.
+- **A name is matched against the cache's spelling, not the wiki's.** If the
+  game calls something "Spider (Level 2)" then "spider" finds it and "Level 2
+  spider" does not. Type less of the name rather than more.
 - **Your Slayer task isn't read.** Trip size is a number you set, not a count
-  remaining, and the monster is one you pin rather than one the task names — for
-  the same reason as above, since the task only ever names the umbrella.
+  remaining, and the monster is one you choose rather than one the task names —
+  for the same reason as above, since the task only ever names the umbrella.
+- **The lookup lists every NPC with a name, not only the ones you can fight.**
+  Filtering to monsters would mean deciding what a monster is, and the honest
+  signal for that — a populated combat-stats array — is the same one that reads
+  as unpopulated for a genuinely all-ones NPC. Showing everything and letting you
+  read the hitpoints beside each row is the version that cannot hide the monster
+  you were looking for.
 
 ## Found a bug?
 
@@ -223,7 +285,7 @@ its basis attached, and pasting a stretch of that log almost always settles it.
 
 ```bash
 ./gradlew build   # compile + package; also proves the JDK + wrapper work
-./gradlew test    # runs the 402-test JUnit suite
+./gradlew test    # runs the 496-test JUnit suite
 ./gradlew run     # launches a full RuneLite dev client with the plugin loaded
 ```
 
@@ -254,6 +316,30 @@ both sides of the same filter; an estimate of zero reaching the panel; and a
 shutdown that emptied the ledger's idea of what was worn but not the plugin's.
 The sixth was a guard clause nothing noticed the loss of, because the arithmetic
 underneath already answered zero — deleted, with the reason left where it stood.
+
+The monster lookup added forty-nine more, every one of which went red the first
+time it was run except one — and that one was the useful result. Deleting the rule
+that files a plan under the id you measured *on the weapon you're holding* changed
+nothing, because in every test written for it the id with that record was also the
+only id with any record at all. The case that separates the two rules — two ids
+measured, one of them on a different weapon, and the wrong one being the lower —
+is now a test, and the mutation goes red. Where breaking a guard in both directions
+made sense, both directions were run: the pin's "offer a way to clear this" was
+forced on and forced off, and each was caught by a different test.
+
+One test in the same batch was deleted rather than kept. It asserted that searching
+twice gives the same list both times, which two calls to a pure function over an
+unchanged map do whatever the ordering is — including when the ordering is the
+accident of a hash bucket. It could not fail, and the order it was supposed to be
+guarding is pinned explicitly instead.
+
+Reviewing the finished work then turned up a fifth thing no mutation would have
+caught, because it was an assumption rather than a line. `startUp()` had been
+rebuilding the plan on the thread it was called from, which is fine until the
+rebuild starts resolving item names — `PluginManager` calls both lifecycle methods
+straight from the Swing thread, and `Client.getItemDefinition` throws off the
+client thread in a shipped client. The rebuild is marshalled now, and the
+assertion that it stays marshalled is a test.
 
 A review of the finished work then found four things no mutation would have,
 because they were absent behaviour rather than undefended lines. The first kill
@@ -303,7 +389,19 @@ Reasoned from the API, not yet observed in game:
   a target switch, or the tick after.** This is the one that decides whether the
   two leaks above exist at all, and it's pinned by tests rather than fixed on a
   guess, so that whichever answer turns out true, the fix is a one-line change
-  rather than a rewrite.
+  rather than a rewrite;
+- that reading the NPC archive costs what it looks like it costs. The sweep is
+  four thousand definitions a tick for four ticks, spread rather than done in one
+  because `AGENTS.md` says not to scan everything at once — but "four ticks and
+  you don't feel it" is an expectation, not a measurement, and a slow machine is
+  where it would show;
+- that the archive's NPC group is resident by the time the first tick fires. If
+  it isn't, the sweep reads a list of unnamed placeholders, throws it away and
+  starts again on the next tick, which is what it's built to do — but how many
+  times that happens in practice is unknown;
+- that the sidebar's row list stays readable for the widest umbrella name in the
+  game. Twenty rows is the cap, and "spider" is nowhere near it, but nothing has
+  drawn twenty of them yet.
 
 ## License
 

@@ -215,12 +215,12 @@ public final class TripAdvisor
 	/**
 	 * Resolves the name in the "Plan for" setting to a monster.
 	 *
-	 * <p>Four places to look, in the order that gets the most complete answer: the
+	 * <p>Five places to look, in the order that gets the most complete answer: the
 	 * pin the menu action wrote (which carries the live NPC's own hitpoints, for a
 	 * monster that may never have been killed), then the monster being fought right
-	 * now, then this session's records, then the archive. Case-insensitive
-	 * throughout, because it is a string somebody typed rather than one the game
-	 * supplied.
+	 * now, then this session's records, then the archive, and finally the game's own
+	 * monster list. Case-insensitive throughout, because it is a string somebody
+	 * typed rather than one the game supplied.
 	 *
 	 * <p>The monster being fought is in that list for a reason worth naming. A
 	 * player who types a name the plugin has never seen gets "no such monster",
@@ -228,16 +228,27 @@ public final class TripAdvisor
 	 * plugin plainly does know it. Without this branch the panel would go on saying
 	 * the monster does not exist while the player was hitting it.
 	 *
+	 * <p><b>{@link MonsterCatalogue}'s index is last, and it is what makes this
+	 * field usable at all.</b> Before it, a typed name only resolved to something
+	 * already fought, pinned or remembered — so the field could name a monster you
+	 * had killed and nothing else, which is the wrong half of the problem: the
+	 * monster you have never killed is the one whose cost you cannot guess. The
+	 * index is consulted last because everything above it carries either evidence or
+	 * a live reading, and it is consulted <em>only when the name is
+	 * unambiguous</em>: see {@link #whyPinFailed}.
+	 *
 	 * @param typed the setting's value, already trimmed. Never empty here.
 	 * @param pin   the hidden companion setting, or null
-	 * @return the pinned target, or null when the name matches nothing — which the
-	 * caller reports as {@link TripAdvice.Waiting#UNKNOWN_MONSTER} rather than
+	 * @param index the game's own monster list, or null before it has been read
+	 * @return the pinned target, or null when the name matches nothing or matches
+	 * too much — which the caller reports through {@link #whyPinFailed} rather than
 	 * silently falling back, because a silent fallback would plan for the wrong
 	 * monster under a name the player chose
 	 */
 	@Nullable
 	public static PlanTarget resolvePin(String typed, @Nullable PlanTarget pin,
-		@Nullable FoughtNpc fighting, AmmoLedger ledger, AmmoArchive archive)
+		@Nullable FoughtNpc fighting, AmmoLedger ledger, AmmoArchive archive,
+		@Nullable MonsterIndex index)
 	{
 		if (pin != null && pin.getName().equalsIgnoreCase(typed))
 		{
@@ -262,7 +273,95 @@ public final class TripAdvisor
 				return PlanTarget.of(entry, PlanTarget.Source.PINNED);
 			}
 		}
+
+		if (index != null)
+		{
+			final List<MonsterIndex.Match> matches = index.exactMatches(typed);
+			if (matches.size() == 1)
+			{
+				final MonsterIndex.Match match = matches.get(0);
+				return new PlanTarget(
+					preferMeasured(match.getNpcIds(), ledger, archive, ledger.getEquipped()),
+					match.getName(), match.getHitpoints(), PlanTarget.Source.PINNED);
+			}
+		}
 		return null;
+	}
+
+	/**
+	 * Why {@link #resolvePin} came back with nothing.
+	 *
+	 * <p>Two very different problems wear the same empty result. "Venenatsi" is a
+	 * typo and the fix is to retype it; "spider" is nineteen of Krystilia's
+	 * thirty-six tasks and the fix is to say <em>which</em> spider, which a text
+	 * field cannot offer and the side panel can. Reporting both as "no such monster"
+	 * would send a player looking for a spelling mistake that is not there.
+	 *
+	 * <p>More than one exact match always means more than one <em>size</em>:
+	 * {@link MonsterIndex} folds ids that share a name and hitpoints into one row,
+	 * so two rows are two genuinely different monsters. That is precisely the
+	 * condition under which picking silently would be a factor-of-425 error.
+	 */
+	public static TripAdvice.Waiting whyPinFailed(String typed, @Nullable MonsterIndex index)
+	{
+		return index != null && index.exactMatches(typed).size() > 1
+			? TripAdvice.Waiting.AMBIGUOUS_MONSTER
+			: TripAdvice.Waiting.UNKNOWN_MONSTER;
+	}
+
+	/**
+	 * Which of several NPC ids sharing one name and one size a plan should be filed
+	 * under.
+	 *
+	 * <p>Records are keyed by monster <em>and</em> loadout, and one monster placed
+	 * in several regions is several ids. Picking the wrong one of those files the
+	 * plan against an id with no history, so a player who has measured a hundred of
+	 * something gets an estimate instead of their own measurement — the record is
+	 * right there and the plan is looking one id to its left.
+	 *
+	 * <p>So the id with evidence wins, and the strongest evidence wins first: a
+	 * record measured on the setup being worn, then any record this session, then
+	 * anything a previous session remembered, then the lowest id as the tie-break
+	 * that keeps the choice deterministic. <b>Nothing is merged.</b> This chooses
+	 * which existing key to look under; it never averages two ids' records into one,
+	 * which is the failure {@link AmmoLedger}'s keying exists to make
+	 * unrepresentable.
+	 *
+	 * @param npcIds   every id sharing the name and the hitpoints. Never empty.
+	 * @param equipped the setup worn now
+	 */
+	public static int preferMeasured(List<Integer> npcIds, AmmoLedger ledger, AmmoArchive archive,
+		Loadout equipped)
+	{
+		// Sorted here rather than trusted to arrive sorted. MonsterIndex.Match does
+		// guarantee it, and this method taking the guarantee on faith is how a second
+		// caller one day gets a tie-break that depends on iteration order — which is
+		// not a tie-break. It costs a copy of a list that is almost always one long.
+		final List<Integer> ordered = new ArrayList<>(npcIds);
+		Collections.sort(ordered);
+
+		for (int npcId : ordered)
+		{
+			if (ledger.get(npcId, equipped) != null)
+			{
+				return npcId;
+			}
+		}
+		for (int npcId : ordered)
+		{
+			if (ledger.bestFor(npcId) != null)
+			{
+				return npcId;
+			}
+		}
+		for (int npcId : ordered)
+		{
+			if (archive.get(npcId) != null)
+			{
+				return npcId;
+			}
+		}
+		return ordered.get(0);
 	}
 
 	/**

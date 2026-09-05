@@ -1,5 +1,6 @@
 package com.matthewmariner.gunnarstools;
 
+import java.util.Arrays;
 import java.util.Collections;
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
@@ -503,7 +504,7 @@ public class TripAdvisorTest
 	{
 		PlanTarget pin = new PlanTarget(VENENATIS, "Venenatis", 850, PlanTarget.Source.PINNED);
 
-		PlanTarget resolved = TripAdvisor.resolvePin("venenatis", pin, null, ledger, archive);
+		PlanTarget resolved = TripAdvisor.resolvePin("venenatis", pin, null, ledger, archive, null);
 
 		assertEquals(VENENATIS, resolved.getNpcId());
 		assertEquals("the pin is what carries hitpoints for a monster never killed",
@@ -516,7 +517,7 @@ public class TripAdvisorTest
 		// Without this, a player who typed a name the plugin had never seen would go
 		// and attack one and still be told it does not exist.
 		PlanTarget resolved = TripAdvisor.resolvePin("Venenatis", null,
-			npc(40, VENENATIS, "Venenatis", 850), ledger, archive);
+			npc(40, VENENATIS, "Venenatis", 850), ledger, archive, null);
 
 		assertEquals(VENENATIS, resolved.getNpcId());
 		assertEquals(850, resolved.getHitpoints());
@@ -528,7 +529,7 @@ public class TripAdvisorTest
 	{
 		measure(SPINDEL, "Spindel", 200, SHORTBOW, 4, 25L);
 
-		PlanTarget resolved = TripAdvisor.resolvePin("SPINDEL", null, null, ledger, archive);
+		PlanTarget resolved = TripAdvisor.resolvePin("SPINDEL", null, null, ledger, archive, null);
 
 		assertEquals(SPINDEL, resolved.getNpcId());
 		assertEquals(200, resolved.getHitpoints());
@@ -539,7 +540,7 @@ public class TripAdvisorTest
 	{
 		remember(VENENATIS, "Venenatis", 850, SHORTBOW, 12, 100L);
 
-		PlanTarget resolved = TripAdvisor.resolvePin("venenatis", null, null, ledger, archive);
+		PlanTarget resolved = TripAdvisor.resolvePin("venenatis", null, null, ledger, archive, null);
 
 		assertEquals(VENENATIS, resolved.getNpcId());
 		assertEquals(850, resolved.getHitpoints());
@@ -550,7 +551,7 @@ public class TripAdvisorTest
 	{
 		// Reported rather than fallen back from. Quietly planning for a different
 		// monster under the name the player chose is wrong and looks right.
-		assertNull(TripAdvisor.resolvePin("Zulrah", null, null, ledger, archive));
+		assertNull(TripAdvisor.resolvePin("Zulrah", null, null, ledger, archive, null));
 	}
 
 	@Test
@@ -560,7 +561,7 @@ public class TripAdvisorTest
 		// hidden companion must never win on its own.
 		PlanTarget pin = new PlanTarget(VENENATIS, "Venenatis", 850, PlanTarget.Source.PINNED);
 
-		assertNull(TripAdvisor.resolvePin("Callisto", pin, null, ledger, archive));
+		assertNull(TripAdvisor.resolvePin("Callisto", pin, null, ledger, archive, null));
 	}
 
 	@Test
@@ -575,7 +576,7 @@ public class TripAdvisorTest
 		measure(SPINDEL, "Spindel", 200, CROSSBOW, 4, 25L);
 		ledger.equipped(SHORTBOW);
 
-		PlanTarget resolved = TripAdvisor.resolvePin("Spindel", null, null, ledger, archive);
+		PlanTarget resolved = TripAdvisor.resolvePin("Spindel", null, null, ledger, archive, null);
 
 		assertEquals(SPINDEL, resolved.getNpcId());
 		assertEquals(200, resolved.getHitpoints());
@@ -583,5 +584,169 @@ public class TripAdvisorTest
 		// And the measurement is still refused, which is the half that matters.
 		assertFalse("the crossbow's four kills are not the shortbow's measurement",
 			advise(resolved, SHORTBOW).isMeasured());
+	}
+
+	// --- the game's own monster list ------------------------------------------
+
+	/**
+	 * The gap this closed. A typed name used to resolve only against something
+	 * already pinned, fought, measured or remembered — so the field could name a
+	 * monster you had killed and nothing else, which is the wrong half of the
+	 * problem. The monster you have never killed is the one whose cost you cannot
+	 * guess.
+	 */
+	@Test
+	public void aNameOnlyTheGameKnowsResolvesThroughTheMonsterList()
+	{
+		MonsterIndex index = indexOf(npc(0, VENENATIS, "Venenatis", 850));
+
+		PlanTarget resolved = TripAdvisor.resolvePin("venenatis", null, null, ledger, archive, index);
+
+		assertEquals(VENENATIS, resolved.getNpcId());
+		assertEquals(850, resolved.getHitpoints());
+		assertEquals(PlanTarget.Source.PINNED, resolved.getSource());
+	}
+
+	@Test
+	public void theMonsterListIsTheLastPlaceLookedRatherThanTheFirst()
+	{
+		// Everything above it carries either evidence or a live reading. A record of
+		// four kills is a better answer than a name out of a list, and it has to win
+		// even when both know the monster.
+		measure(SPINDEL, "Spindel", 200, SHORTBOW, 4, 25L);
+		MonsterIndex index = indexOf(npc(0, SPINDEL + 1, "Spindel", 999));
+
+		PlanTarget resolved = TripAdvisor.resolvePin("Spindel", null, null, ledger, archive, index);
+
+		assertEquals(SPINDEL, resolved.getNpcId());
+		assertEquals(200, resolved.getHitpoints());
+	}
+
+	/**
+	 * The refusal that matters. "Spider" is a two-hitpoint Spider and it is
+	 * Venenatis at 850; picking one would be wrong by a factor of 425 while looking
+	 * entirely confident.
+	 */
+	@Test
+	public void anUmbrellaNameResolvesToNothingRatherThanToOneOfThem()
+	{
+		MonsterIndex index = indexOf(
+			npc(0, 3019, "Spider", 2),
+			npc(0, VENENATIS, "Spider", 850));
+
+		assertNull(TripAdvisor.resolvePin("Spider", null, null, ledger, archive, index));
+		assertEquals(TripAdvice.Waiting.AMBIGUOUS_MONSTER,
+			TripAdvisor.whyPinFailed("Spider", index));
+	}
+
+	@Test
+	public void aNameNothingAnswersToIsATypoRatherThanAChoice()
+	{
+		MonsterIndex index = indexOf(npc(0, VENENATIS, "Venenatis", 850));
+
+		assertNull(TripAdvisor.resolvePin("Venenatsi", null, null, ledger, archive, index));
+		assertEquals(TripAdvice.Waiting.UNKNOWN_MONSTER,
+			TripAdvisor.whyPinFailed("Venenatsi", index));
+	}
+
+	@Test
+	public void withNoMonsterListAtAllTheOldAnswerIsStillTheHonestOne()
+	{
+		// Before the sweep finishes there is nothing to be ambiguous against, and
+		// claiming ambiguity would send a player looking for a choice that is not
+		// on offer yet.
+		assertEquals(TripAdvice.Waiting.UNKNOWN_MONSTER, TripAdvisor.whyPinFailed("Spider", null));
+	}
+
+	@Test
+	public void severalIdsSharingANameAndASizeAreOneMonsterRatherThanAChoice()
+	{
+		MonsterIndex index = indexOf(
+			npc(0, 700, "Bandit", 60),
+			npc(0, 701, "Bandit", 60));
+
+		PlanTarget resolved = TripAdvisor.resolvePin("Bandit", null, null, ledger, archive, index);
+
+		assertEquals("nothing to choose between: same name, same size, same answer",
+			700, resolved.getNpcId());
+		assertEquals(60, resolved.getHitpoints());
+	}
+
+	// --- which of several ids a plan is filed under ----------------------------
+
+	@Test
+	public void withNoEvidenceAnywhereTheLowestIdWins()
+	{
+		assertEquals(700, TripAdvisor.preferMeasured(Arrays.asList(702, 700, 701),
+			ledger, archive, SHORTBOW));
+	}
+
+	@Test
+	public void anIdMeasuredOnTheWornSetupWinsOutright()
+	{
+		measure(702, "Bandit", 60, SHORTBOW, 3, 20L);
+
+		assertEquals(702, TripAdvisor.preferMeasured(Arrays.asList(700, 701, 702),
+			ledger, archive, SHORTBOW));
+	}
+
+	/**
+	 * The case that separates the first rule from the second, and the one a
+	 * mutation pass caught missing: with the first rule deleted, every other test
+	 * here still passed because the id with the worn setup's record also happened
+	 * to be the id with <em>a</em> record. Two ids, both measured, only one of them
+	 * on the weapon in the player's hands — and the wrong one is the lower.
+	 */
+	@Test
+	public void theWornSetupsRecordBeatsAnotherSetupsEvenAtALowerId()
+	{
+		measure(700, "Bandit", 60, CROSSBOW, 9, 20L);
+		measure(702, "Bandit", 60, SHORTBOW, 1, 20L);
+
+		assertEquals(702, TripAdvisor.preferMeasured(Arrays.asList(700, 701, 702),
+			ledger, archive, SHORTBOW));
+	}
+
+	@Test
+	public void anIdMeasuredOnAnotherSetupStillBeatsOneMeasuredNowhere()
+	{
+		// The record is filed under the crossbow, and the plan is about the shortbow —
+		// so it will not be published as this weapon's measurement. It is still the id
+		// with a history behind it, and pointing the plan somewhere else would throw
+		// that away for nothing.
+		measure(702, "Bandit", 60, CROSSBOW, 3, 20L);
+
+		assertEquals(702, TripAdvisor.preferMeasured(Arrays.asList(700, 701, 702),
+			ledger, archive, SHORTBOW));
+	}
+
+	@Test
+	public void anIdOnlyAPreviousSessionSawStillBeatsOneNobodyHasEverFought()
+	{
+		remember(701, "Bandit", 60, SHORTBOW, 5, 20L);
+
+		assertEquals(701, TripAdvisor.preferMeasured(Arrays.asList(700, 701, 702),
+			ledger, archive, SHORTBOW));
+	}
+
+	@Test
+	public void thisSessionOutranksWhatAPreviousOneRemembered()
+	{
+		remember(701, "Bandit", 60, SHORTBOW, 50, 20L);
+		measure(702, "Bandit", 60, SHORTBOW, 1, 20L);
+
+		assertEquals("the setup in the player's hands, now",
+			702, TripAdvisor.preferMeasured(Arrays.asList(700, 701, 702),
+				ledger, archive, SHORTBOW));
+	}
+
+	private static MonsterIndex indexOf(FoughtNpc... monsters)
+	{
+		MonsterIndex index = new MonsterIndex();
+		for (FoughtNpc monster : monsters)
+		{
+			index.add(monster);
+		}
+		return index.seal();
 	}
 }

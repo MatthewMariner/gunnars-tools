@@ -64,6 +64,19 @@ public final class TripAdvice
 		UNKNOWN_MONSTER("no such monster", "clear \"Plan for\""),
 
 		/**
+		 * The name in the "Plan for" setting is one several monsters answer to, and
+		 * they are not the same size.
+		 *
+		 * <p>This is nineteen of Krystilia's thirty-six tasks: "spider" is a
+		 * two-hitpoint Spider and it is Venenatis at 850, and a plugin that picked
+		 * one would be wrong by a factor of 425 while looking entirely confident. A
+		 * settings text field has nowhere to offer a choice, so it says there is one
+		 * and points at the surface that can — the lookup panel, where every
+		 * candidate is listed with its own hitpoints beside it.
+		 */
+		AMBIGUOUS_MONSTER("several monsters match", "pick one in the side panel"),
+
+		/**
 		 * Estimates are switched off and this monster has not been measured. Said out
 		 * loud rather than shown as "nothing measured", because the fix is a setting
 		 * rather than a kill.

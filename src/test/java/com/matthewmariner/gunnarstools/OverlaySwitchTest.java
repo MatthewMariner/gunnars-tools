@@ -49,6 +49,9 @@ public class OverlaySwitchTest
 		plugin.config = config;
 		plugin.configStore = config;
 		plugin.clientThread = Runnable::run;
+		plugin.sidePanel = new RecordingSidePanel();
+		plugin.npcSource = new FakeNpcSource();
+		plugin.itemNames = itemId -> "item " + itemId;
 		plugin.overlayRegistry = new RecordingOverlays();
 		plugin.tripPanelOverlay = new TripPanelOverlay(plugin, config, null);
 		plugin.bankWithdrawalOverlay = new BankWithdrawalOverlay(plugin, config);
@@ -224,6 +227,10 @@ public class OverlaySwitchTest
 			.withArchive("1;5265,Spindel,200,4,-1,-1," + ARROW + ":100")
 			.withPlanFor("Spindel");
 		plugin.configStore = config;
+		plugin.clientThread = Runnable::run;
+		plugin.sidePanel = new RecordingSidePanel();
+		plugin.npcSource = new FakeNpcSource();
+		plugin.itemNames = itemId -> "item " + itemId;
 		plugin.overlayRegistry = new RecordingOverlays();
 		plugin.tripPanelOverlay = new TripPanelOverlay(plugin, config, null);
 		plugin.bankWithdrawalOverlay = new BankWithdrawalOverlay(plugin, config);

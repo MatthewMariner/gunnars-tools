@@ -3,12 +3,14 @@ package com.matthewmariner.gunnarstools;
 import com.google.inject.Provides;
 import java.util.List;
 import java.util.Map;
+import java.util.function.IntFunction;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.IndexDataBase;
 import net.runelite.api.Item;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemContainer;
@@ -32,8 +34,11 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.util.ImageUtil;
 
 /**
  * Gunnar's Tools — measures how much ammunition (arrows, bolts, runes) each kill
@@ -67,6 +72,22 @@ import net.runelite.client.ui.overlay.OverlayManager;
  * totals are there to answer with — as an estimate, labelled, never republished as
  * a measurement.
  *
+ * <h2>And naming the subject is a separate problem from choosing it</h2>
+ *
+ * <p>{@link PlanTarget} made it possible to plan for a monster you were not
+ * killing. It did not make it possible to <em>name</em> one that was not in front
+ * of you: the only way to pick a subject was to shift-right-click a monster in the
+ * world, so planning a trip required already standing next to the thing being
+ * planned for. The question is asked at a bank, where there is nothing to
+ * right-click.
+ *
+ * <p>{@link MonsterCatalogue} reads the game's own NPC list out of the client's
+ * cache — a slice per tick, nothing bundled, nothing downloaded —
+ * {@link MonsterIndex} makes it searchable by name, and
+ * {@link MonsterLookupPanel} puts that in the sidebar. Where a name means several
+ * monsters of different sizes, which is nineteen of Krystilia's thirty-six tasks,
+ * every one of them is listed with its own hitpoints rather than one being chosen.
+ *
  * <p>This class is deliberately thin. Every handler translates a RuneLite event
  * into a call on one of those and decides nothing itself, so that the decisions
  * all live somewhere a test can reach without a game client. The one piece of
@@ -89,6 +110,17 @@ public class GunnarsToolsPlugin extends Plugin
 	/** The menu entry that pins a monster. Client-side only; nothing reaches the server. */
 	static final String PIN_OPTION = "Plan trip";
 
+	/**
+	 * The NPC archive inside the config index.
+	 *
+	 * <p>Nine, within index 2, which is what {@code Client.getIndexConfig()}
+	 * returns. Both numbers are {@code net.runelite.cache}'s own
+	 * {@code ConfigType.NPC} and {@code IndexType.CONFIGS}, checked against the
+	 * cache library published alongside the client version this project pins rather
+	 * than remembered.
+	 */
+	private static final int NPC_ARCHIVE = 9;
+
 	@Inject
 	Client client;
 
@@ -103,6 +135,12 @@ public class GunnarsToolsPlugin extends Plugin
 
 	@Inject
 	OverlayRegistry overlayRegistry;
+
+	@Inject
+	SidePanel sidePanel;
+
+	@Inject
+	NpcSource npcSource;
 
 	@Inject
 	TripPanelOverlay tripPanelOverlay;
@@ -122,8 +160,37 @@ public class GunnarsToolsPlugin extends Plugin
 	 */
 	ConsumptionMeter meter = new ConsumptionMeter(this::isConsumable);
 
+	/**
+	 * How an item id becomes a name for the sidebar's summary.
+	 *
+	 * <p>Not private and not final, for exactly the reason {@link #meter} is not:
+	 * it reads the item cache off the client, so with no game running it cannot
+	 * resolve anything, and the summary would be the one thing the sidebar draws
+	 * that no offline test could reach. A test substitutes a function of its own;
+	 * nothing in production replaces it.
+	 *
+	 * <p>It is also why the summary is composed here rather than in the panel.
+	 * {@code Client.getItemDefinition} throws off the client thread — see
+	 * {@link SidePanel} — and the panel's thread is Swing's.
+	 */
+	IntFunction<String> itemNames = this::nameOf;
+
 	private final KillAttribution attribution = new KillAttribution();
 	private final AmmoLedger ledger = new AmmoLedger();
+
+	/**
+	 * The game's own monster list, read a slice per tick so a name can be looked up
+	 * without the monster being present.
+	 *
+	 * <p>This is the half of "choose the subject of the plan" that
+	 * {@link PlanTarget} could not supply on its own. Separating the subject from
+	 * the measurement made it possible to plan for a monster you were not killing;
+	 * it did not make it possible to <em>name</em> one that was not in front of you,
+	 * so the only way to choose was still to shift-right-click something in the
+	 * world — at a bank, where there is nothing to right-click and the question is
+	 * asked. See {@link MonsterCatalogue}.
+	 */
+	private final MonsterCatalogue catalogue = new MonsterCatalogue();
 
 	/**
 	 * What previous sessions left behind. Loaded once at {@link #startUp()} and
@@ -216,7 +283,25 @@ public class GunnarsToolsPlugin extends Plugin
 			: new AmmoArchive();
 		log.debug("Gunnar's Tools loaded {}", archive);
 
-		rebuildPlan();
+		// Before the first rebuild for the same reason the archive is: the sidebar
+		// button is the only affordance in this plugin that announces itself, and a
+		// player who does not know the lookup exists is the player whose complaint
+		// produced it.
+		if (config.showLookup())
+		{
+			sidePanel.show();
+		}
+
+		// Marshalled, and this line is a bug fix rather than a precaution.
+		// PluginManager.startPlugin asserts it is on the Swing event dispatch thread
+		// and calls startUp() straight from it — checked against the 1.12.38 client's
+		// own bytecode, and true of shutDown() too. Rebuilding the plan now reads the
+		// item cache to compose the sidebar's summary, and Client.getItemDefinition
+		// throws IllegalStateException off the client thread in a shipped client. It
+		// also walks the ledger, which is the same reason onConfigChanged marshals.
+		// One tick's delay before the first answer appears, against an exception on
+		// every enable.
+		clientThread.run(this::rebuildPlan);
 		active = true;
 	}
 
@@ -228,6 +313,13 @@ public class GunnarsToolsPlugin extends Plugin
 		// underneath it.
 		overlayRegistry.remove(tripPanelOverlay);
 		overlayRegistry.remove(bankWithdrawalOverlay);
+
+		// And the sidebar, unconditionally rather than under the same setting that
+		// added it. A player who turns the lookup off and then disables the plugin
+		// would otherwise leave a button behind pointing at a panel whose plugin is
+		// gone — the teardown has to undo what happened, not what the settings
+		// currently say should have.
+		sidePanel.hide();
 
 		// The session summary, which the log has carried since M1. Logged on the way
 		// out rather than only per kill, because a per-kill line scrolls past and
@@ -252,6 +344,12 @@ public class GunnarsToolsPlugin extends Plugin
 		attribution.reset();
 		ledger.clear();
 		archive = new AmmoArchive();
+
+		// The monster list goes too. It is a reading of the cache rather than a
+		// setting, and a plugin that was switched off may have been switched off
+		// across a game update — a stale list would answer confidently about NPC ids
+		// that have since moved.
+		catalogue.clear();
 		clearPlan();
 		active = false;
 	}
@@ -295,9 +393,49 @@ public class GunnarsToolsPlugin extends Plugin
 			primeContainers();
 		}
 
+		scanMonsters();
+
 		if (tickEnded(meter.tickEnded()))
 		{
 			logAdvice();
+		}
+	}
+
+	/**
+	 * Reads one slice of the game's monster list.
+	 *
+	 * <p>On the tick because {@code Client.getNpcDefinition} refuses to run
+	 * anywhere but the client thread, and a slice at a time because
+	 * {@code AGENTS.md} does not permit scanning sixteen thousand of anything in one
+	 * go. The whole sweep is four ticks and then this returns immediately forever —
+	 * {@link MonsterCatalogue#advance} short-circuits once it is ready, so there is
+	 * no flag here to get out of step with it.
+	 *
+	 * <p>Package-private so a test can drive the sweep to completion without
+	 * manufacturing game ticks.
+	 */
+	void scanMonsters()
+	{
+		if (!config.showLookup() || catalogue.isReady())
+		{
+			return;
+		}
+
+		if (catalogue.advance(npcSource, MonsterCatalogue.SLICE) == MonsterCatalogue.State.READY)
+		{
+			log.debug("Gunnar's Tools read {}", catalogue.getIndex());
+
+			// The list arriving can turn a name that matched nothing into a monster.
+			// Without this the panel would go on saying "no such monster" about a name
+			// it can now resolve, until something else happened to provoke a rebuild.
+			rebuildPlan();
+		}
+		else
+		{
+			// The progress moved and nothing else did. Four of these a session, which
+			// is what keeps a panel opened mid-sweep from showing a percentage frozen
+			// at whatever it was when it was last drawn.
+			sidePanel.refresh(LookupSummary.of(advice, itemNames));
 		}
 	}
 
@@ -389,6 +527,8 @@ public class GunnarsToolsPlugin extends Plugin
 			GunnarsToolsConfig.REMEMBER_BETWEEN_SESSIONS.equals(event.getKey())
 				&& !config.rememberBetweenSessions();
 
+		final boolean lookupToggled = GunnarsToolsConfig.SHOW_LOOKUP.equals(event.getKey());
+
 		clientThread.run(() ->
 		{
 			if (forgetEverything)
@@ -398,6 +538,24 @@ public class GunnarsToolsPlugin extends Plugin
 				// panel reads, and the stored string is what the next session reads.
 				archive = new AmmoArchive();
 				configStore.write(GunnarsToolsConfig.ARCHIVE, "");
+			}
+
+			if (lookupToggled)
+			{
+				if (config.showLookup())
+				{
+					sidePanel.show();
+				}
+				else
+				{
+					// Both halves, and the second one is not tidiness. The monster list
+					// is what "Plan for" resolves an unfought name through, so a
+					// catalogue left behind would keep answering after the surface that
+					// explains it had gone — and the setting's own description promises
+					// the previous behaviour back, not a half of it.
+					sidePanel.hide();
+					catalogue.clear();
+				}
 			}
 
 			rebuildPlan();
@@ -581,7 +739,21 @@ public class GunnarsToolsPlugin extends Plugin
 	 */
 	void pin(FoughtNpc npc)
 	{
-		final PlanTarget pinned = PlanTarget.of(npc, PlanTarget.Source.PINNED);
+		pin(PlanTarget.of(npc, PlanTarget.Source.PINNED));
+	}
+
+	/**
+	 * The same pin, from a monster that is not in the scene.
+	 *
+	 * <p>Split out so the sidebar lookup and the right-click menu entry write the
+	 * same two settings by the same code rather than by two copies of it. A pin
+	 * chosen from a list and a pin chosen from a corpse are the same fact.
+	 *
+	 * @param pinned null is a no-op, which is how a monster the plugin could not
+	 *               read is skipped rather than substituted for
+	 */
+	void pin(@Nullable PlanTarget pinned)
+	{
 		if (pinned == null)
 		{
 			return;
@@ -596,6 +768,49 @@ public class GunnarsToolsPlugin extends Plugin
 		// only took effect on the next kill would look broken in exactly the
 		// situation it exists for.
 		rebuildPlan();
+	}
+
+	/**
+	 * Plans for a monster the player picked out of the sidebar lookup.
+	 *
+	 * <p><b>Marshalled onto the client thread, and that is the whole reason this
+	 * method exists rather than the panel calling {@link #pin(PlanTarget)}.</b> A
+	 * Swing panel's listeners run on the event dispatch thread; {@code pin} rebuilds
+	 * the plan, and rebuilding walks {@link AmmoLedger}'s map, which the client
+	 * thread inserts into the first time a new monster is fought. That is exactly
+	 * the race {@link #onConfigChanged} was already fixed for — see
+	 * {@link ClientThreadRunner} — and a second door into the same map deserved the
+	 * same lock rather than a second argument about why it was probably fine.
+	 *
+	 * <p>Which of the match's ids the plan is filed under is
+	 * {@link TripAdvisor#preferMeasured}'s decision, made on the client thread here
+	 * where the ledger is safe to read.
+	 */
+	void planFor(MonsterIndex.Match match)
+	{
+		clientThread.run(() -> pin(new PlanTarget(
+			TripAdvisor.preferMeasured(match.getNpcIds(), ledger, archive, ledger.getEquipped()),
+			match.getName(), match.getHitpoints(), PlanTarget.Source.PINNED)));
+	}
+
+	/**
+	 * Unpins whatever was chosen, so the plan follows what the player is fighting
+	 * again.
+	 *
+	 * <p>Both settings, because {@link GunnarsToolsConfig#pinnedTarget()} is only
+	 * consulted when its name matches the visible field — leaving it behind is
+	 * harmless but leaves a stale identity in the profile that the next matching
+	 * name would silently adopt. Marshalled for the same reason as
+	 * {@link #planFor}.
+	 */
+	void clearPin()
+	{
+		clientThread.run(() ->
+		{
+			configStore.write(GunnarsToolsConfig.PLAN_FOR, "");
+			configStore.write(GunnarsToolsConfig.PINNED_TARGET, "");
+			rebuildPlan();
+		});
 	}
 
 	/**
@@ -752,27 +967,57 @@ public class GunnarsToolsPlugin extends Plugin
 	 * without a game tick. The decisions inside it are all in {@link PlanTarget}
 	 * and {@link TripAdvisor}; what is here is the reading of the settings and the
 	 * caching.
+	 *
+	 * <p><b>Client thread only.</b> It walks {@link AmmoLedger}'s map, which the
+	 * client thread inserts into, and it resolves item ids to names through the
+	 * client's own cache, which refuses to run anywhere else. Every caller either is
+	 * the client thread already — the tick, a menu click, an equipment change — or
+	 * marshals through {@link ClientThreadRunner}, which is what {@link #startUp()},
+	 * {@link #onConfigChanged} and {@link #planFor} do. There is no lock here; there
+	 * is a single writer, kept single on purpose.
 	 */
 	void rebuildPlan()
 	{
+		advice = computeAdvice();
+
+		// One notification, on every path out of the rebuild. The sidebar draws the
+		// same answer and Swing does not repaint on somebody else's news; a return
+		// that skipped this would leave the previous monster's numbers under the
+		// current monster's name.
+		sidePanel.refresh(LookupSummary.of(advice, itemNames));
+	}
+
+	/**
+	 * The answer, and the two fields recording what it was built about.
+	 *
+	 * <p>Split from {@link #rebuildPlan()} so that every way of failing to resolve a
+	 * name still ends up going through the one notification above. It assigns
+	 * {@link #adviceOwner} and {@link #adviceLastKill} rather than returning them,
+	 * which is not pure and is deliberate: the three have to move together or the
+	 * tick's "did anything change?" comparison starts lying.
+	 */
+	private TripAdvice computeAdvice()
+	{
 		final String typed = config.planFor() == null ? "" : config.planFor().trim();
+		final MonsterIndex index = catalogue.getIndex();
 
 		PlanTarget pinned = null;
 		if (!typed.isEmpty())
 		{
 			pinned = TripAdvisor.resolvePin(typed, PlanTarget.parse(config.pinnedTarget()),
-				attribution.getOwner(), ledger, archive);
+				attribution.getOwner(), ledger, archive, index);
 
 			if (pinned == null)
 			{
 				// Deliberately not a fallback. A name that matches nothing is a
 				// mistake the player can fix in one edit, and quietly planning for a
 				// different monster under the name they chose is the worst of the
-				// available behaviours: it is wrong and it looks right.
+				// available behaviours: it is wrong and it looks right. A name that
+				// matches several is a different problem with a different fix, and
+				// TripAdvisor.whyPinFailed is what tells them apart.
 				adviceOwner = attribution.getOwner();
 				adviceLastKill = ledger.getMostRecentKill();
-				advice = TripAdvice.waitingFor(null, TripAdvice.Waiting.UNKNOWN_MONSTER);
-				return;
+				return TripAdvice.waitingFor(null, TripAdvisor.whyPinFailed(typed, index));
 			}
 		}
 
@@ -780,7 +1025,7 @@ public class GunnarsToolsPlugin extends Plugin
 		adviceLastKill = ledger.getMostRecentKill();
 
 		final PlanTarget target = PlanTarget.resolve(pinned, adviceOwner, adviceLastKill);
-		advice = TripAdvisor.advise(target, ledger, archive, ledger.getEquipped(), config.tripKills(),
+		return TripAdvisor.advise(target, ledger, archive, ledger.getEquipped(), config.tripKills(),
 			config.safetyMarginPercent(), config.estimateBeforeMeasuring());
 	}
 
@@ -882,6 +1127,18 @@ public class GunnarsToolsPlugin extends Plugin
 		return archive;
 	}
 
+	/**
+	 * The game's own monster list and how far through reading it the plugin is.
+	 *
+	 * <p>Read by the sidebar lookup on the Swing thread. Safe for the reason
+	 * {@link MonsterCatalogue} documents: nothing partial is ever visible and what
+	 * is published is immutable.
+	 */
+	MonsterCatalogue getCatalogue()
+	{
+		return catalogue;
+	}
+
 	/** Package-private, for {@code GunnarsToolsPluginLifecycleTest}. */
 	KillAttribution getAttribution()
 	{
@@ -918,6 +1175,88 @@ public class GunnarsToolsPlugin extends Plugin
 	ClientThreadRunner provideClientThreadRunner(ClientThread clientThread)
 	{
 		return clientThread::invoke;
+	}
+
+	/**
+	 * The lookup's place in the sidebar — see {@link SidePanel}.
+	 *
+	 * <p>The button is built once and added and removed, rather than rebuilt on
+	 * every toggle. {@code ClientToolbar} keys its navigation off the button
+	 * instance, so a second one built on the way back in would leave the first
+	 * behind.
+	 */
+	@Provides
+	SidePanel provideSidePanel(ClientToolbar clientToolbar, MonsterLookupPanel lookupPanel)
+	{
+		final NavigationButton button = NavigationButton.builder()
+			.tooltip("Gunnar's Tools — monster lookup")
+			.icon(ImageUtil.loadImageResource(MonsterLookupPanel.class, "lookup_icon.png"))
+			.priority(6)
+			.panel(lookupPanel)
+			.build();
+
+		return new SidePanel()
+		{
+			@Override
+			public void show()
+			{
+				clientToolbar.addNavigation(button);
+			}
+
+			@Override
+			public void hide()
+			{
+				clientToolbar.removeNavigation(button);
+			}
+
+			@Override
+			public void refresh(List<LookupSummary.Line> answer)
+			{
+				lookupPanel.accept(answer);
+			}
+		};
+	}
+
+	/**
+	 * Where the monster list is read from — see {@link NpcSource}.
+	 *
+	 * <p><b>Two client calls and one archive id, and every one of them is checked
+	 * against the client this project pins.</b> {@code getIndexConfig()} is index 2
+	 * (CONFIGS) and 9 is the NPC archive within it, which is
+	 * {@code net.runelite.cache}'s own {@code IndexType.CONFIGS} and
+	 * {@code ConfigType.NPC}; and the client's own {@code NPCComposition.get(id)}
+	 * bottoms out in {@code loadData(9, id)} on that same archive, so
+	 * {@link Client#getNpcDefinition(int)} is not a different route to the data —
+	 * it is the same route with the game's own decoder on the end of it, which is
+	 * why this plugin ships no decoder of its own.
+	 *
+	 * <p>{@code getFileIds} returns null rather than an empty array for an archive
+	 * id it does not have, and it hands back its <em>internal</em> array rather than
+	 * a copy. Both are handled: null is passed straight through as "not yet", and
+	 * {@link MonsterCatalogue} clones what it keeps.
+	 *
+	 * <p>{@code getNpcDefinition} throws off the client thread — an
+	 * {@code IllegalStateException} in production, where assertions are disabled —
+	 * so everything that calls this runs from the game tick.
+	 */
+	@Provides
+	NpcSource provideNpcSource(Client gameClient)
+	{
+		return new NpcSource()
+		{
+			@Override
+			public int[] npcIds()
+			{
+				final IndexDataBase configs = gameClient.getIndexConfig();
+				return configs == null ? null : configs.getFileIds(NPC_ARCHIVE);
+			}
+
+			@Override
+			public FoughtNpc npc(int npcId)
+			{
+				return FoughtNpc.of(FoughtNpc.NO_INDEX, gameClient.getNpcDefinition(npcId));
+			}
+		};
 	}
 
 	/**

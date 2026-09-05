@@ -46,6 +46,7 @@ public class GunnarsToolsConfigTest
 		assertEquals("subtractCarried", GunnarsToolsConfig.SUBTRACT_CARRIED);
 		assertEquals("showOverlay", GunnarsToolsConfig.SHOW_OVERLAY);
 		assertEquals("highlightBank", GunnarsToolsConfig.HIGHLIGHT_BANK);
+		assertEquals("showLookup", GunnarsToolsConfig.SHOW_LOOKUP);
 	}
 
 	@Test
@@ -72,10 +73,11 @@ public class GunnarsToolsConfigTest
 			GunnarsToolsConfig.SUBTRACT_CARRIED,
 			GunnarsToolsConfig.SHOW_OVERLAY,
 			GunnarsToolsConfig.HIGHLIGHT_BANK,
+			GunnarsToolsConfig.SHOW_LOOKUP,
 			GunnarsToolsConfig.PINNED_TARGET,
 			GunnarsToolsConfig.ARCHIVE));
 
-		assertEquals(10, keys.size());
+		assertEquals(11, keys.size());
 	}
 
 	@Test
@@ -92,12 +94,18 @@ public class GunnarsToolsConfigTest
 	}
 
 	@Test
-	public void bothSurfacesAreOnByDefault()
+	public void allThreeSurfacesAreOnByDefault()
 	{
 		GunnarsToolsConfig config = new Defaults();
 
 		assertTrue(config.showOverlay());
 		assertTrue(config.highlightBank());
+
+		// And the lookup most of all. The complaint that produced it was not "I
+		// disagree with the numbers", it was "I don't know how to test this, I'm
+		// lost" — and a sidebar button that has to be switched on is that complaint
+		// with an extra step.
+		assertTrue(config.showLookup());
 	}
 
 	@Test

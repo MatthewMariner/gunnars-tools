@@ -35,6 +35,7 @@ public interface GunnarsToolsConfig extends Config
 	String SUBTRACT_CARRIED = "subtractCarried";
 	String SHOW_OVERLAY = "showOverlay";
 	String HIGHLIGHT_BANK = "highlightBank";
+	String SHOW_LOOKUP = "showLookup";
 
 	/**
 	 * The two keys the plugin writes for itself rather than for the user.
@@ -103,13 +104,21 @@ public interface GunnarsToolsConfig extends Config
 	 * — which is the state a player is in at a bank, where there is no monster to
 	 * infer from and the whole question is what to pack.
 	 *
-	 * <p>It is a name rather than a dropdown because the list would have to come
-	 * from somewhere, and every candidate source is one this plugin already refuses:
-	 * a bundled monster table cannot resolve nineteen of Krystilia's thirty-six
-	 * tasks (see {@link FoughtNpc}), and a list of what you have measured excludes
-	 * the monster you are about to fight for the first time. Shift-right-clicking a
-	 * monster in game writes this field for you, hitpoints and all, which is the
-	 * path that works for a monster you have never killed.
+	 * <p>It is a free text field rather than a dropdown, and the reason has changed
+	 * since it was written. It used to say that a list would have to come from
+	 * somewhere and that every candidate source was one this plugin refuses — a
+	 * bundled monster table cannot resolve nineteen of Krystilia's thirty-six tasks
+	 * (see {@link FoughtNpc}), and a list of what you have measured excludes the
+	 * monster you are about to fight for the first time. Both halves of that are
+	 * still true. What was missing was a third source that is neither: the game's
+	 * own cache, read at runtime by {@link MonsterCatalogue}, which is not bundled,
+	 * not stale, and knows every monster rather than only the ones you have killed.
+	 *
+	 * <p>So there is a list now, and it lives in the sidebar rather than in this
+	 * field — because the interesting names are the ambiguous ones and a settings
+	 * control has nowhere to show a choice. This field still resolves a name
+	 * outright when exactly one monster answers to it, and reports
+	 * {@link TripAdvice.Waiting#AMBIGUOUS_MONSTER} when several do.
 	 *
 	 * <p>A name that matches nothing is reported on the panel rather than ignored.
 	 * Falling back silently would plan for a different monster under the name the
@@ -119,7 +128,8 @@ public interface GunnarsToolsConfig extends Config
 		keyName = PLAN_FOR,
 		name = "Plan for",
 		description = "The monster to plan for, by name. Leave it empty to follow what you are "
-			+ "fighting. Shift-right-click a monster and choose \"Plan trip\" to fill it in.",
+			+ "fighting. Find one in the sidebar lookup, or shift-right-click a monster and "
+			+ "choose \"Plan trip\".",
 		position = 3
 	)
 	default String planFor()
@@ -220,6 +230,34 @@ public interface GunnarsToolsConfig extends Config
 		position = 8
 	)
 	default boolean highlightBank()
+	{
+		return true;
+	}
+
+	/**
+	 * Whether the monster lookup appears in RuneLite's sidebar.
+	 *
+	 * <p>Default on, and it is the setting least likely to want turning off. The
+	 * complaint this plugin's lookup was built for was not "I disagree with the
+	 * numbers", it was "I don't know how to test this, I'm lost" — and the answer to
+	 * that has to be visible without being told about it. A sidebar button that
+	 * appears the moment the plugin is enabled is the only surface here that
+	 * announces itself; the panel behind it is also the only place an umbrella name
+	 * like "spider" can be turned into one specific monster.
+	 *
+	 * <p>Off, the sidebar button goes away and the game's monster list stops being
+	 * read, so the "Plan for" field goes back to matching only monsters this plugin
+	 * has already seen. That is the previous behaviour rather than a broken one, and
+	 * it is why this is a switch rather than a warning.
+	 */
+	@ConfigItem(
+		keyName = SHOW_LOOKUP,
+		name = "Show the monster lookup",
+		description = "Adds a sidebar panel for finding a monster by name, so a trip can be planned "
+			+ "at a bank without one on screen.",
+		position = 9
+	)
+	default boolean showLookup()
 	{
 		return true;
 	}

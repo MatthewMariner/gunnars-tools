@@ -55,6 +55,23 @@ public final class FoughtNpc
 	/** How many stats {@code NPCComposition.getStats()} promises. */
 	static final int STAT_COUNT = 6;
 
+	/**
+	 * The scene index of a monster that is not in the scene.
+	 *
+	 * <p>{@link MonsterCatalogue} reads the whole NPC list out of the cache to make
+	 * a monster nameable at a bank, and none of what it reads is standing anywhere.
+	 * Those records carry an id, a name and stats — which is everything a
+	 * {@link PlanTarget} is built from — and no index, because there is no NPC to
+	 * have one.
+	 *
+	 * <p>Negative on purpose: every real index is non-negative, so a catalogue
+	 * record that leaked into {@link KillAttribution} would key a fight against an
+	 * index the game can never produce rather than silently colliding with a real
+	 * monster's. Nothing passes one there — the catalogue and the attribution share
+	 * no call — and this is the guard for the day something tries.
+	 */
+	static final int NO_INDEX = -1;
+
 	private final int index;
 	private final int id;
 	private final String name;

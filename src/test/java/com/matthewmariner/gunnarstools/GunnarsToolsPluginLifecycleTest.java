@@ -6,6 +6,7 @@ import net.runelite.api.gameval.InventoryID;
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -32,6 +33,7 @@ public class GunnarsToolsPluginLifecycleTest
 	private static final int SPINDEL = 5265;
 
 	private final RecordingOverlays overlays = new RecordingOverlays();
+	private final RecordingSidePanel sidebar = new RecordingSidePanel();
 
 	/**
 	 * A plugin with the two injected collaborators {@code startUp()} needs.
@@ -50,6 +52,9 @@ public class GunnarsToolsPluginLifecycleTest
 		plugin.config = config;
 		plugin.configStore = config;
 		plugin.clientThread = Runnable::run;
+		plugin.sidePanel = sidebar;
+		plugin.npcSource = new FakeNpcSource();
+		plugin.itemNames = itemId -> "item " + itemId;
 		plugin.overlayRegistry = overlays;
 		plugin.tripPanelOverlay = new TripPanelOverlay(plugin, plugin.config, null);
 		plugin.bankWithdrawalOverlay = new BankWithdrawalOverlay(plugin, plugin.config);
@@ -240,6 +245,88 @@ public class GunnarsToolsPluginLifecycleTest
 
 		assertTrue("a fresh session files and reads under the same unknown setup",
 			plugin.getAdvice().isMeasured());
+	}
+
+	/**
+	 * The sidebar is the third thing {@code startUp()} registers, and it has to come
+	 * back off with the other two.
+	 *
+	 * <p>Asserted separately from the overlays rather than folded into their test,
+	 * because it goes through a different registry for a different reason — a
+	 * {@code ClientToolbar} rather than an {@code OverlayManager} — and a teardown
+	 * that removed the overlays and forgot the button would leave a sidebar entry
+	 * whose panel belongs to a plugin that is no longer running.
+	 */
+	@Test
+	public void theSidebarLookupIsRegisteredOnStartUpAndGoneAfterShutDown()
+	{
+		GunnarsToolsPlugin plugin = plugin();
+
+		assertFalse("nothing is registered before startUp", sidebar.shown());
+
+		plugin.startUp();
+		assertTrue(sidebar.shown());
+		assertEquals(1, sidebar.showCount());
+
+		plugin.shutDown();
+		assertFalse("shutdown must leave nothing registered", sidebar.shown());
+		assertEquals(1, sidebar.hideCount());
+	}
+
+	/**
+	 * {@code startUp()} builds the first plan on the client thread, not on the
+	 * thread it was called from.
+	 *
+	 * <p>RuneLite calls both lifecycle methods straight from the Swing event
+	 * dispatch thread — {@code PluginManager.startPlugin} and {@code stopPlugin}
+	 * both assert they are on it, verified against the pinned client's bytecode.
+	 * Building a plan walks the ledger's map and resolves item ids through the
+	 * client's own cache, and {@code Client.getItemDefinition} throws
+	 * {@code IllegalStateException} anywhere but the client thread in a shipped
+	 * client. So the rebuild is marshalled, and this is the assertion that it stays
+	 * that way: with a marshaller that declines to run anything, {@code startUp()}
+	 * must leave the plan untouched rather than having built it on the way past.
+	 */
+	@Test
+	public void startUpBuildsTheFirstPlanOnTheClientThreadRatherThanTheOneItArrivedOn()
+	{
+		GunnarsToolsPlugin plugin = plugin();
+		final java.util.List<Runnable> deferred = new java.util.ArrayList<>();
+		plugin.clientThread = deferred::add;
+		plugin.config = new FakeConfig().withPlanFor("Spindel");
+
+		plugin.startUp();
+
+		assertEquals("nothing was decided on the way in", TripAdvice.Waiting.A_TARGET,
+			plugin.getAdvice().getWaitingFor());
+		assertEquals("and exactly one piece of work was handed over", 1, deferred.size());
+
+		deferred.get(0).run();
+
+		assertEquals("which, run on the client thread, is the rebuild",
+			TripAdvice.Waiting.UNKNOWN_MONSTER, plugin.getAdvice().getWaitingFor());
+	}
+
+	/**
+	 * And the reading of the game's monster list is a piece of session state like
+	 * any other.
+	 */
+	@Test
+	public void shutDownForgetsWhatWasReadOutOfTheCache()
+	{
+		GunnarsToolsPlugin plugin = plugin();
+		plugin.npcSource = new FakeNpcSource().with(SPINDEL, "Spindel", 200);
+		plugin.startUp();
+		plugin.scanMonsters();
+
+		assertNotNull("the list has to be there before the teardown means anything",
+			plugin.getCatalogue().getIndex());
+
+		plugin.shutDown();
+
+		assertNull("a list read before a game update must not answer after one",
+			plugin.getCatalogue().getIndex());
+		assertEquals(MonsterCatalogue.State.WAITING, plugin.getCatalogue().getState());
 	}
 
 	private static FoughtNpc spindel(int index)

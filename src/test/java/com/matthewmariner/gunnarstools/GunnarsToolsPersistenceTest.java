@@ -43,6 +43,9 @@ public class GunnarsToolsPersistenceTest
 		plugin.config = config;
 		plugin.configStore = config;
 		plugin.clientThread = Runnable::run;
+		plugin.sidePanel = new RecordingSidePanel();
+		plugin.npcSource = new FakeNpcSource();
+		plugin.itemNames = itemId -> "item " + itemId;
 		plugin.overlayRegistry = new RecordingOverlays();
 		plugin.tripPanelOverlay = new TripPanelOverlay(plugin, config, null);
 		plugin.bankWithdrawalOverlay = new BankWithdrawalOverlay(plugin, config);
@@ -231,6 +234,11 @@ public class GunnarsToolsPersistenceTest
 			ranInside[0] = false;
 		};
 		plugin.startUp();
+
+		// startUp marshals its own first rebuild — PluginManager calls it from the
+		// Swing thread — so the count starts from after that. What is being pinned
+		// here is the config handler, not the lifecycle.
+		marshalled[0] = 0;
 		config.withTripKills(250);
 
 		plugin.onConfigChanged(configChanged(GunnarsToolsConfig.TRIP_KILLS));
