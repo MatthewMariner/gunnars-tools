@@ -320,7 +320,7 @@ its basis attached, and pasting a stretch of that log almost always settles it.
 
 ```bash
 ./gradlew build   # compile + package; also proves the JDK + wrapper work
-./gradlew test    # runs the 496-test JUnit suite
+./gradlew test    # runs the 518-test JUnit suite
 ./gradlew run     # launches a full RuneLite dev client with the plugin loaded
 ```
 

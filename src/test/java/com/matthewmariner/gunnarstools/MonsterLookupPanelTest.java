@@ -318,7 +318,13 @@ public class MonsterLookupPanelTest
 	@Test
 	public void aSearchAlreadyUnderwayIsNotOverwrittenByTheSettingsField()
 	{
-		source.with(2265, "Dagannoth Rex", 255);
+		// Three of them, so "Dagganoth" genuinely fails to resolve and there really is
+		// something waiting to be carried over. With one Dagannoth the name settles,
+		// nothing is left over, and this test passes without exercising the guard —
+		// which is how it read before a mutation found it green.
+		source.with(2265, "Dagannoth Rex", 255)
+			.with(2266, "Dagannoth Prime", 255)
+			.with(2267, "Dagannoth Supreme", 255);
 		config.withPlanFor("Dagganoth");
 		plugin();
 		readTheList();

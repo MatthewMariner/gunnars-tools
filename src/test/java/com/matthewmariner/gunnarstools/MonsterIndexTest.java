@@ -454,10 +454,17 @@ public class MonsterIndexTest
 	@Test
 	public void aQueryTooShortToBeAMisspellingIsNotTreatedAsOne()
 	{
-		MonsterIndex index = indexOf(npc(1, "Rat", 3), npc(2, "Bat", 5));
+		// Nothing here is called "Rat", so the near pass is the only one left to run.
+		// Written the other way round — with a Rat in the index for "rat" to match
+		// exactly — this could not fail whatever the floor was set to, because the
+		// exact match would stop the near pass before it started. A mutation found it.
+		MonsterIndex index = indexOf(npc(1, "Bat", 5), npc(2, "Cat", 4));
 
-		assertEquals("bat is one edit from rat and is not offered for it",
-			Arrays.asList("Rat"), names(index.search("rat", 10)));
+		assertEquals("three letters reach too many neighbours to guess from",
+			0, index.search("rat", 10).getTotal());
+
+		assertEquals("a fourth letter is enough to mean something", 1,
+			indexOf(npc(1, "Bats", 5)).search("rats", 10).getTotal());
 	}
 
 	/**
