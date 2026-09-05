@@ -11,7 +11,7 @@ It reads only your own inventory and equipment; nothing about anyone else.
 [![RuneLite](https://img.shields.io/badge/RuneLite-1.12.38-blue)](https://runelite.net)
 [![Java](https://img.shields.io/badge/Java-11-orange)](https://runelite.net)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-496-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-518-brightgreen)](#development)
 
 </div>
 
@@ -69,9 +69,9 @@ needs.
 
 ## Look a monster up by name
 
-Open the sidebar — the arrow icon appears the moment you enable the plugin —
-type a name, and pick the monster you mean. You never have to be standing next
-to it.
+**The sidebar is where you pick a monster.** Open it — the lookup icon appears
+the moment you enable the plugin — start typing, and the list narrows as you go.
+You never have to be standing next to the thing you're planning for.
 
 ```
 [ spider                    ]
@@ -97,23 +97,52 @@ That list is read out of **your own game cache** at startup — no download, no
 bundled monster table, no network. It takes about three seconds and then it is
 there for the session.
 
-The hitpoints beside every row are the whole reason it is a list rather than a
-box that guesses. Krystilia's "spider" task means all five of the monsters above,
-and they differ by a factor of 425; a lookup that picked one for you would be
-wrong most of the time and confident about it. Where several NPC ids share a name
-*and* a size — one monster placed in several regions — they fold into a single
-row that says how many, and picking it files the plan under whichever of them
-you've actually measured.
+### Spelling is forgiven
 
-Typing a name into the *Plan for* setting works the same way, with one
-difference: a settings field has nowhere to offer you a choice, so an umbrella
-name is reported rather than resolved.
+You don't have to get the name right. Type `dagganoth` and you get the
+Dagannoths:
+
+```
+[ dagganoth                 ]
+
+Dagannoth              70 hp
+Dagannoth Prime       255 hp
+Dagannoth Rex         255 hp
+Dagannoth spawn        10 hp
+Dagannoth Supreme     255 hp
+```
+
+Names are matched exactly first, then by what they start with, then by what they
+contain, and only if none of that found anything by how close they are — one
+wrong letter in a short name, two in a longer one, with a pair of letters typed
+the wrong way round counting as one mistake rather than two. Case and stray
+spaces never matter. Because the close matches are a last resort, a search that
+was already working is never diluted: `spid` gives you spiders, not Spindel.
+
+### It offers, it doesn't guess
+
+The hitpoints beside every row are the whole reason this is a list rather than a
+box that answers. Krystilia's "spider" task means all five of the monsters
+further up, and they differ by a factor of 425; a lookup that picked one for you
+would be wrong most of the time and confident about it. The same goes for
+`dagganoth`: three Kings, an ordinary Dagannoth and a spawn all answer to it, and
+which one you meant is not something to be assumed. Where several NPC ids share a
+name *and* a size — one monster placed in several regions — they fold into a
+single row that says how many, and picking it files the plan under whichever of
+them you've actually measured.
+
+Typing into the *Plan for* setting runs the same search, spelling and all, and
+settles a name when only one monster answers to it. What it can't do is show you
+a list, so a name that means several is reported instead:
 
 ```
 Gunnar's Tools
 several monsters match
 pick one in the side panel
 ```
+
+Open the sidebar after that and it's already searching for what you typed — you
+don't have to type it again.
 
 ## Before you've killed one
 
@@ -158,8 +187,9 @@ why both hitpoint figures are on screen. Turn **Estimate before measuring** off
 if you'd rather have nothing than that.
 
 And when it can't answer, it says which of the reasons applies — waiting for a
-monster, waiting for a kill, hitpoints that didn't resolve, or a name in
-*Plan for* that matches nothing:
+monster, waiting for a kill, hitpoints that didn't resolve, a name in *Plan for*
+that several monsters answer to, one that nothing does, or the monster list still
+being read in the first few seconds after you log in:
 
 ```
 Gunnar's Tools
@@ -173,13 +203,18 @@ attack or pin one
 |---|---|---|
 | Trip size | 100 | How many kills to plan for |
 | Safety margin | 10% | Extra padding added on top of the figure |
-| Plan for | *(empty)* | The monster to plan for, by name. Empty follows what you're fighting; the sidebar lookup and the "Plan trip" right-click both fill it in for you |
+| Plan for | *(empty)* | The monster to plan for, by name, spelling forgiven. Empty follows what you're fighting; the sidebar lookup and the "Plan trip" right-click both fill it in for you. A name several monsters answer to is reported rather than guessed at — the sidebar is the only place a choice can be offered |
 | Estimate before measuring | On | Show an estimate for a monster you haven't killed yet, scaled from one you have. Always labelled as an estimate |
 | Remember between sessions | On | Keep a summary of what each monster cost, so there's an answer at the bank. Turning it off forgets what's stored |
 | Subtract what you carry | On | The bank highlight shows what's left to withdraw rather than what the trip needs in total |
 | Show the trip panel | On | The panel described above, including what it's waiting for |
 | Highlight in the bank | On | The green/red outline in the bank |
-| Show the monster lookup | On | The sidebar panel for finding a monster by name. Off, the sidebar button goes away and *Plan for* goes back to matching only monsters this plugin has already seen |
+| Show the monster lookup | On | The sidebar panel for finding a monster by name — the main way to choose one. Off, the sidebar button goes away and *Plan for* goes back to matching only monsters this plugin has already seen |
+
+The last two sit together under **Choose a monster in the sidebar**, because
+they're the same job seen from two sides and the sidebar is the side that works:
+it can show you every monster a name could mean, and a settings field can only
+tell you there were several.
 
 The margin is the only dial that widens the answer, on purpose. Planning
 against your single worst kill instead of the average would triple what you

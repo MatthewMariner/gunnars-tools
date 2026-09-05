@@ -267,6 +267,72 @@ public class MonsterLookupPanelTest
 		assertTrue(text.contains("850 hp"));
 	}
 
+	// --- the settings field's text arrives here --------------------------------
+
+	/**
+	 * The other half of "one front door", and the whole shape of the report.
+	 *
+	 * <p>He typed "Dagganoth" into the settings field. A text field there cannot draw
+	 * five candidates and cannot report what it did, so what it does instead is hand
+	 * the name over: opening the sidebar shows the search already run on what he
+	 * actually typed. Being told to pick one in the side panel and then having to
+	 * retype, from memory, the word already established as the one he gets wrong,
+	 * would be the same dead end one step further along.
+	 */
+	@Test
+	public void openingTheSidebarCarriesOverWhatTheSettingsFieldCouldNotResolve()
+	{
+		source.with(2265, "Dagannoth Rex", 255)
+			.with(2266, "Dagannoth Prime", 255)
+			.with(2267, "Dagannoth Supreme", 255);
+		config.withPlanFor("Dagganoth");
+		plugin();
+		readTheList();
+		MonsterLookupPanel panel = new MonsterLookupPanel(plugin);
+
+		onSwing(panel::onActivate);
+
+		List<String> text = textOf(panel);
+		assertTrue("Rex", text.contains("Dagannoth Rex"));
+		assertTrue("Prime", text.contains("Dagannoth Prime"));
+		assertTrue("Supreme", text.contains("Dagannoth Supreme"));
+		assertTrue("with their own hitpoints, which is what tells them apart",
+			text.contains("255 hp"));
+	}
+
+	@Test
+	public void aNameTheFieldResolvedIsNotCarriedOverAtAll()
+	{
+		config.withPlanFor("Venenatis");
+		plugin();
+		readTheList();
+		MonsterLookupPanel panel = new MonsterLookupPanel(plugin);
+
+		onSwing(panel::onActivate);
+
+		assertTrue("the box is empty, so the panel is in its ready-and-waiting state",
+			textOf(panel).contains(MonsterCatalogue.State.READY.getHeadline()));
+	}
+
+	/** Whatever is being typed here now outranks anything a setting had to say. */
+	@Test
+	public void aSearchAlreadyUnderwayIsNotOverwrittenByTheSettingsField()
+	{
+		source.with(2265, "Dagannoth Rex", 255);
+		config.withPlanFor("Dagganoth");
+		plugin();
+		readTheList();
+		MonsterLookupPanel panel = new MonsterLookupPanel(plugin);
+		type(panel, "spindel");
+
+		onSwing(panel::onActivate);
+
+		List<String> text = textOf(panel);
+		assertTrue("Spindel", text.contains("Spindel"));
+		assertFalse("and the settings field's name did not push it out",
+			text.contains("Dagannoth Rex"));
+	}
+
 	@Test
 	public void theWayOutOfAPinIsSomethingYouCanPress()
 	{

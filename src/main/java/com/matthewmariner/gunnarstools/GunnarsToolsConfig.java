@@ -3,6 +3,7 @@ package com.matthewmariner.gunnarstools;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.ConfigSection;
 import net.runelite.client.config.Range;
 import net.runelite.client.config.Units;
 
@@ -49,6 +50,37 @@ public interface GunnarsToolsConfig extends Config
 	String PINNED_TARGET = "pinnedTarget";
 
 	String ARCHIVE = "archive";
+
+	/**
+	 * The heading over the two settings about <em>which</em> monster, and the one
+	 * piece of signage this plugin can put where the mistake was actually made.
+	 *
+	 * <p>It exists to say one thing in the one place the words are certain to be
+	 * read. The owner opened the settings, typed a monster's name into the text field
+	 * there — because that is where you go when you open a plugin's settings — and
+	 * never found the sidebar at all, with its switch ticked the whole time. A ticked
+	 * box is not an advertisement. A settings panel cannot draw a list of candidates
+	 * or report what a field did with what was typed, so naming the surface that can,
+	 * directly above the field, is the most this one can do about it.
+	 *
+	 * <p>Positioned third, where "Plan for" used to sit on its own — RuneLite orders
+	 * sections and loose settings together by position — so nothing whose place a
+	 * user knows has moved. The two settings that were always about choosing a
+	 * monster are simply under a heading now, and the heading points at the sidebar.
+	 *
+	 * <p>Not a config key in the sense the rest of this file means: RuneLite keys the
+	 * collapsed state off its value, so renaming it re-expands a section somebody
+	 * closed and does nothing worse.
+	 */
+	@ConfigSection(
+		name = "Choose a monster in the sidebar",
+		description = "The sidebar lookup searches every monster in your game's own list and "
+			+ "shows each one a name could mean, with its hitpoints. Picking one fills in "
+			+ "\"Plan for\". A settings field cannot show you a list of five Dagannoths; the "
+			+ "panel can.",
+		position = 3
+	)
+	String TARGET_SECTION = "monster";
 
 	/**
 	 * How many monsters the trip is for.
@@ -104,6 +136,24 @@ public interface GunnarsToolsConfig extends Config
 	 * — which is the state a player is in at a bank, where there is no monster to
 	 * infer from and the whole question is what to pack.
 	 *
+	 * <h2>It is the second door, and it is kept because it is also the pin</h2>
+	 *
+	 * <p><b>The sidebar lookup is the front door.</b> There were two ways to name a
+	 * monster and the obvious one was the worse one: the owner typed into this field,
+	 * because that is where you go when you open a plugin's settings, and a text
+	 * field cannot draw a list, cannot offer a choice between the five monsters a
+	 * name reaches, and cannot show what it did with what was typed. The panel can do
+	 * all three. So this field points there — see {@link #TARGET_SECTION} for the
+	 * heading above it and {@link MonsterLookupPanel#onActivate()} for the name it
+	 * hands over when it fails.
+	 *
+	 * <p>It is not deleted, and that is not sentiment. It is where the pin is
+	 * <em>stored</em>: {@link GunnarsToolsPlugin#pin} writes the chosen monster's name
+	 * here, so the settings panel shows what is pinned, and blanking it is how a pin
+	 * is cleared — which every "clear" affordance in the plugin refers to by name. A
+	 * shipped config key also cannot be removed without silently resetting it for
+	 * everyone who has one saved; see {@code AGENTS.md}.
+	 *
 	 * <p>It is a free text field rather than a dropdown, and the reason has changed
 	 * since it was written. It used to say that a list would have to come from
 	 * somewhere and that every candidate source was one this plugin refuses — a
@@ -114,23 +164,21 @@ public interface GunnarsToolsConfig extends Config
 	 * own cache, read at runtime by {@link MonsterCatalogue}, which is not bundled,
 	 * not stale, and knows every monster rather than only the ones you have killed.
 	 *
-	 * <p>So there is a list now, and it lives in the sidebar rather than in this
-	 * field — because the interesting names are the ambiguous ones and a settings
-	 * control has nowhere to show a choice. This field still resolves a name
-	 * outright when exactly one monster answers to it, and reports
-	 * {@link TripAdvice.Waiting#AMBIGUOUS_MONSTER} when several do.
-	 *
-	 * <p>A name that matches nothing is reported on the panel rather than ignored.
-	 * Falling back silently would plan for a different monster under the name the
-	 * player chose.
+	 * <p>What this field does now is resolve through exactly the same search the
+	 * panel uses, misspellings included, so a name it can settle it settles. When it
+	 * cannot, it reports which of {@link TripAdvice.Waiting}'s reasons applies rather
+	 * than falling back silently — planning for a different monster under the name
+	 * the player chose is wrong and looks right — and hands the text to the panel so
+	 * the choice is one click away rather than one retype away.
 	 */
 	@ConfigItem(
 		keyName = PLAN_FOR,
 		name = "Plan for",
-		description = "The monster to plan for, by name. Leave it empty to follow what you are "
-			+ "fighting. Find one in the sidebar lookup, or shift-right-click a monster and "
-			+ "choose \"Plan trip\".",
-		position = 3
+		description = "The monster to plan for, by name — spelling is forgiven. Empty follows "
+			+ "what you are fighting. Search in the sidebar instead when a name could mean "
+			+ "several monsters: only the panel can show you the choice.",
+		position = 1,
+		section = TARGET_SECTION
 	)
 	default String planFor()
 	{
@@ -240,10 +288,15 @@ public interface GunnarsToolsConfig extends Config
 	 * <p>Default on, and it is the setting least likely to want turning off. The
 	 * complaint this plugin's lookup was built for was not "I disagree with the
 	 * numbers", it was "I don't know how to test this, I'm lost" — and the answer to
-	 * that has to be visible without being told about it. A sidebar button that
-	 * appears the moment the plugin is enabled is the only surface here that
-	 * announces itself; the panel behind it is also the only place an umbrella name
-	 * like "spider" can be turned into one specific monster.
+	 * that has to be visible without being told about it. The panel behind it is also
+	 * the only place an umbrella name like "spider" can be turned into one specific
+	 * monster.
+	 *
+	 * <p><b>A ticked box is not an advertisement, which is the lesson this setting
+	 * has now taught twice.</b> It was on, the button was in the toolbar, and the
+	 * owner still went to the settings panel and typed into a text field. So it sits
+	 * under {@link #TARGET_SECTION}'s heading next to the field it is the answer to,
+	 * rather than seventh in a list of switches.
 	 *
 	 * <p>Off, the sidebar button goes away and the game's monster list stops being
 	 * read, so the "Plan for" field goes back to matching only monsters this plugin
@@ -253,9 +306,11 @@ public interface GunnarsToolsConfig extends Config
 	@ConfigItem(
 		keyName = SHOW_LOOKUP,
 		name = "Show the monster lookup",
-		description = "Adds a sidebar panel for finding a monster by name, so a trip can be planned "
-			+ "at a bank without one on screen.",
-		position = 9
+		description = "The sidebar panel that searches every monster in your game's own list, "
+			+ "spelling forgiven, and shows every one a name could mean with its hitpoints. "
+			+ "Picking one fills in \"Plan for\" above.",
+		position = 2,
+		section = TARGET_SECTION
 	)
 	default boolean showLookup()
 	{
