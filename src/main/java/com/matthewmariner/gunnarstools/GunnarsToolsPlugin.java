@@ -6,6 +6,7 @@ import java.util.Map;
 import java.util.function.IntFunction;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
+import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
@@ -1220,8 +1221,22 @@ public class GunnarsToolsPlugin extends Plugin
 	 * every toggle. {@code ClientToolbar} keys its navigation off the button
 	 * instance, so a second one built on the way back in would leave the first
 	 * behind.
+	 *
+	 * <p>{@code @Singleton} is what makes "built once" structural rather than a
+	 * property of this method happening to be asked for only once today. Without
+	 * it a second injection point added later would run this again, build a
+	 * second button around a second panel, and leave the first one in the toolbar
+	 * forever — the leak the paragraph above is about, arriving by a different
+	 * door.
+	 *
+	 * <p>Not circular despite {@link MonsterLookupPanel} taking this plugin
+	 * itself: RuneLite hands the injector this instance rather than asking it to
+	 * build one, so resolving {@code GunnarsToolsPlugin} while filling in this
+	 * class's own {@link #sidePanel} field returns the object already under
+	 * construction rather than recursing into this provider a second time.
 	 */
 	@Provides
+	@Singleton
 	SidePanel provideSidePanel(ClientToolbar clientToolbar, MonsterLookupPanel lookupPanel)
 	{
 		final NavigationButton button = NavigationButton.builder()
