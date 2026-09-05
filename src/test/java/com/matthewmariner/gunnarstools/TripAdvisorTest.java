@@ -636,26 +636,76 @@ public class TripAdvisorTest
 
 		assertNull(TripAdvisor.resolvePin("Spider", null, null, ledger, archive, index));
 		assertEquals(TripAdvice.Waiting.AMBIGUOUS_MONSTER,
-			TripAdvisor.whyPinFailed("Spider", index));
+			TripAdvisor.whyPinFailed("Spider", index, true));
 	}
 
+	/**
+	 * The report that produced the fuzzy search, at the layer that has to answer it.
+	 *
+	 * <p>He typed "Dagganoth" — one {@code g} too many and one {@code n} too few —
+	 * and the field resolved nothing. It still does not resolve, because the name is
+	 * six monsters rather than one, but the reason it gives is now the reason a
+	 * player can act on: there is a choice, and the panel is where it is offered.
+	 */
 	@Test
-	public void aNameNothingAnswersToIsATypoRatherThanAChoice()
+	public void aMisspeltNameIsAChoiceRatherThanAMonsterThatDoesNotExist()
+	{
+		MonsterIndex index = indexOf(
+			npc(0, 2265, "Dagannoth Rex", 255),
+			npc(0, 2266, "Dagannoth Prime", 255),
+			npc(0, 2267, "Dagannoth Supreme", 255),
+			npc(0, 2243, "Dagannoth", 70),
+			npc(0, 2256, "Dagannoth spawn", 10));
+
+		assertNull("five monsters answer to it; picking one would be the 425-fold error",
+			TripAdvisor.resolvePin("Dagganoth", null, null, ledger, archive, index));
+		assertEquals(TripAdvice.Waiting.AMBIGUOUS_MONSTER,
+			TripAdvisor.whyPinFailed("Dagganoth", index, true));
+	}
+
+	/**
+	 * And a single near miss is resolved rather than reported, because there is
+	 * nothing to choose between.
+	 */
+	@Test
+	public void aTypoWithOneAnswerResolvesToIt()
 	{
 		MonsterIndex index = indexOf(npc(0, VENENATIS, "Venenatis", 850));
 
-		assertNull(TripAdvisor.resolvePin("Venenatsi", null, null, ledger, archive, index));
-		assertEquals(TripAdvice.Waiting.UNKNOWN_MONSTER,
-			TripAdvisor.whyPinFailed("Venenatsi", index));
+		PlanTarget resolved = TripAdvisor.resolvePin("Venenatsi", null, null, ledger, archive,
+			index);
+
+		assertEquals(VENENATIS, resolved.getNpcId());
+		assertEquals("and it is the monster's own size, not the typo's", 850,
+			resolved.getHitpoints());
 	}
 
 	@Test
-	public void withNoMonsterListAtAllTheOldAnswerIsStillTheHonestOne()
+	public void aNameNothingIsEvenCloseToIsStillAMonsterThatDoesNotExist()
 	{
-		// Before the sweep finishes there is nothing to be ambiguous against, and
-		// claiming ambiguity would send a player looking for a choice that is not
-		// on offer yet.
-		assertEquals(TripAdvice.Waiting.UNKNOWN_MONSTER, TripAdvisor.whyPinFailed("Spider", null));
+		MonsterIndex index = indexOf(npc(0, VENENATIS, "Venenatis", 850));
+
+		assertNull(TripAdvisor.resolvePin("Zulrah", null, null, ledger, archive, index));
+		assertEquals(TripAdvice.Waiting.UNKNOWN_MONSTER,
+			TripAdvisor.whyPinFailed("Zulrah", index, true));
+	}
+
+	/**
+	 * A list that has not been read is not a fact about the monster.
+	 *
+	 * <p>The sweep takes a few seconds after login, and a name typed inside that
+	 * window used to be reported as a monster that does not exist — certain, wrong,
+	 * and pointing at the spelling. Switch the lookup off and no list is coming at
+	 * all, which is the previous behaviour the setting promises, so the old answer
+	 * is the honest one again.
+	 */
+	@Test
+	public void aMonsterListThatHasNotArrivedSaysSoRatherThanBlamingTheName()
+	{
+		assertEquals(TripAdvice.Waiting.MONSTER_LIST,
+			TripAdvisor.whyPinFailed("Spider", null, true));
+		assertEquals(TripAdvice.Waiting.UNKNOWN_MONSTER,
+			TripAdvisor.whyPinFailed("Spider", null, false));
 	}
 
 	@Test

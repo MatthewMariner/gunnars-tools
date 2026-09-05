@@ -304,7 +304,7 @@ public class GunnarsToolsPluginLifecycleTest
 		deferred.get(0).run();
 
 		assertEquals("which, run on the client thread, is the rebuild",
-			TripAdvice.Waiting.UNKNOWN_MONSTER, plugin.getAdvice().getWaitingFor());
+			TripAdvice.Waiting.MONSTER_LIST, plugin.getAdvice().getWaitingFor());
 	}
 
 	/**

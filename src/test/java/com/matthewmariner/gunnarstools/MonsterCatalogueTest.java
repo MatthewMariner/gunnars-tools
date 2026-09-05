@@ -50,7 +50,7 @@ public class MonsterCatalogueTest
 		assertTrue(catalogue.isReady());
 		assertEquals(100, catalogue.getPercent());
 		assertEquals(3, catalogue.getIndex().size());
-		assertEquals(850, catalogue.getIndex().exactMatches("Venenatis").get(0).getHitpoints());
+		assertEquals(850, catalogue.getIndex().resolve("Venenatis").get(0).getHitpoints());
 	}
 
 	/**

@@ -276,7 +276,7 @@ public final class TripAdvisor
 
 		if (index != null)
 		{
-			final List<MonsterIndex.Match> matches = index.exactMatches(typed);
+			final List<MonsterIndex.Match> matches = index.resolve(typed);
 			if (matches.size() == 1)
 			{
 				final MonsterIndex.Match match = matches.get(0);
@@ -291,20 +291,42 @@ public final class TripAdvisor
 	/**
 	 * Why {@link #resolvePin} came back with nothing.
 	 *
-	 * <p>Two very different problems wear the same empty result. "Venenatsi" is a
-	 * typo and the fix is to retype it; "spider" is nineteen of Krystilia's
-	 * thirty-six tasks and the fix is to say <em>which</em> spider, which a text
-	 * field cannot offer and the side panel can. Reporting both as "no such monster"
-	 * would send a player looking for a spelling mistake that is not there.
+	 * <p>Three very different problems wear the same empty result. A name nothing
+	 * answers to is a mistake the player can fix in one edit; "spider" is nineteen of
+	 * Krystilia's thirty-six tasks and the fix is to say <em>which</em> spider, which
+	 * a text field cannot offer and the side panel can; and a monster list that has
+	 * not been read yet is not a fact about the monster at all. Reporting all three
+	 * as "no such monster" sends a player looking for a spelling mistake that is not
+	 * there.
 	 *
-	 * <p>More than one exact match always means more than one <em>size</em>:
-	 * {@link MonsterIndex} folds ids that share a name and hitpoints into one row,
-	 * so two rows are two genuinely different monsters. That is precisely the
-	 * condition under which picking silently would be a factor-of-425 error.
+	 * <p>The third one is the fix for a message that was quietly lying. The sweep
+	 * takes a few seconds after login, and a name typed inside that window resolved
+	 * to nothing and was reported as a monster that does not exist — the exact
+	 * confusion this method exists to prevent, produced by the method itself. With
+	 * the lookup switched off there is no list coming, and the field is back to
+	 * matching only what this plugin has already seen, which is what its own setting
+	 * promises: "no such monster" is then the honest answer rather than a stale one.
+	 *
+	 * <p>More than one match always means more than one <em>monster</em>:
+	 * {@link MonsterIndex} folds ids that share a name and hitpoints into one row, so
+	 * two rows are two genuinely different monsters, and
+	 * {@link MonsterIndex#resolve} only ever returns rows that matched equally well.
+	 * That is precisely the condition under which picking silently would be a
+	 * factor-of-425 error.
+	 *
+	 * @param lookupEnabled {@code GunnarsToolsConfig#showLookup()} — whether a list
+	 *                      is coming at all
 	 */
-	public static TripAdvice.Waiting whyPinFailed(String typed, @Nullable MonsterIndex index)
+	public static TripAdvice.Waiting whyPinFailed(String typed, @Nullable MonsterIndex index,
+		boolean lookupEnabled)
 	{
-		return index != null && index.exactMatches(typed).size() > 1
+		if (index == null)
+		{
+			return lookupEnabled
+				? TripAdvice.Waiting.MONSTER_LIST
+				: TripAdvice.Waiting.UNKNOWN_MONSTER;
+		}
+		return index.resolve(typed).size() > 1
 			? TripAdvice.Waiting.AMBIGUOUS_MONSTER
 			: TripAdvice.Waiting.UNKNOWN_MONSTER;
 	}

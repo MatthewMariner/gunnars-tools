@@ -1,6 +1,7 @@
 package com.matthewmariner.gunnarstools;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -86,8 +87,45 @@ final class MonsterIndex
 		PREFIX,
 
 		/** The name contains it anywhere. "Giant spider" for "spider". */
-		CONTAINS
+		CONTAINS,
+
+		/**
+		 * The name starts with something close enough to what was typed.
+		 * "Dagannoth Rex" for "dagganoth" — see {@link #prefixDistance}.
+		 */
+		NEAR
 	}
+
+	/**
+	 * Shorter than this and a near match is not attempted at all.
+	 *
+	 * <p>Three characters have too many neighbours to be a spelling mistake: at one
+	 * edit, "rat" reaches "bat", "rats", "at" and a hundred others, and a list of
+	 * everything three letters could have meant is not an answer. The cheap tiers
+	 * already cover a short query — {@link Tier#PREFIX} and {@link Tier#CONTAINS}
+	 * are what "spid" wants.
+	 */
+	static final int NEAR_MATCH_MINIMUM = 4;
+
+	/**
+	 * From this many characters typed, two edits are forgiven rather than one.
+	 *
+	 * <p>The owner typed "Dagganoth" for "Dagannoth", which is two substitutions in
+	 * nine characters, and a threshold that only ever forgave one would have missed
+	 * exactly the report that produced this. A long word carries enough signal that
+	 * two edits still identify it; a five-letter one does not.
+	 */
+	static final int TWO_EDITS_FROM = 7;
+
+	/**
+	 * The most edits ever forgiven, however long the query.
+	 *
+	 * <p>A ceiling rather than a scale, because the cost of a near match is not the
+	 * arithmetic — it is the wrong monster appearing in a list the player then picks
+	 * from. Three edits into a twelve-letter name reaches things nobody typing it
+	 * meant.
+	 */
+	static final int MAX_EDITS = 2;
 
 	/**
 	 * One monster, as something to plan for: a name, a size, and every NPC id that
@@ -99,11 +137,18 @@ final class MonsterIndex
 		private final int hitpoints;
 		private final List<Integer> npcIds;
 		private final Tier tier;
+		private final int distance;
 
 		Match(String name, int hitpoints, List<Integer> npcIds, Tier tier)
 		{
+			this(name, hitpoints, npcIds, tier, 0);
+		}
+
+		Match(String name, int hitpoints, List<Integer> npcIds, Tier tier, int distance)
+		{
 			this.name = name;
 			this.hitpoints = hitpoints;
+			this.distance = distance;
 
 			// Sorted rather than left in the order the sweep found them. The archive's
 			// id list arrives in whatever order the client's index has it, and the
@@ -158,11 +203,21 @@ final class MonsterIndex
 			return tier;
 		}
 
+		/**
+		 * How many edits away from what was typed, for a {@link Tier#NEAR} match.
+		 * Zero for every other tier, which is what makes it a sort key the cheap
+		 * tiers do not have to know about.
+		 */
+		int getDistance()
+		{
+			return distance;
+		}
+
 		@Override
 		public String toString()
 		{
 			return "Match(" + name + ", hp=" + (hitpoints > 0 ? Integer.toString(hitpoints) : "unresolved")
-				+ ", ids=" + npcIds + ", " + tier + ")";
+				+ ", ids=" + npcIds + ", " + tier + (distance > 0 ? " " + distance : "") + ")";
 		}
 	}
 
@@ -265,7 +320,7 @@ final class MonsterIndex
 
 		final String name = ConfigText.sanitise(raw);
 		final int hitpoints = usableHitpoints(npc);
-		final List<Group> groups = byName.computeIfAbsent(name.toLowerCase(Locale.ROOT),
+		final List<Group> groups = byName.computeIfAbsent(normalise(name),
 			key -> new ArrayList<>(1));
 
 		for (Group group : groups)
@@ -345,26 +400,92 @@ final class MonsterIndex
 	 * Every monster whose name matches {@code query}, best match first.
 	 *
 	 * <p>Best is {@link Tier} order — exactly what was typed, then names starting
-	 * with it, then names containing it anywhere — and within a tier it is the
-	 * name, then the size, then the lowest id. Every one of those is a total order
-	 * over the data, so the same cache and the same query produce the same list
-	 * every time; a results list that reshuffled between keystrokes would be one
-	 * nobody could click.
+	 * with it, then names containing it anywhere, then names starting with something
+	 * close enough — and within a tier it is how close, then the name, then the size,
+	 * then the lowest id. Every one of those is a total order over the data, so the
+	 * same cache and the same query produce the same list every time; a results list
+	 * that reshuffled between keystrokes would be one nobody could click.
 	 *
-	 * @param query what the player typed. Trimmed and case-folded here; empty
-	 *              matches nothing, because a panel listing all sixteen thousand
-	 *              NPCs is a panel that has not been searched.
+	 * <p>Called on every keystroke: this is the autocomplete. The three cheap tiers
+	 * are a scan of the keys and nothing else, and the fourth only runs when they
+	 * came back empty — see {@link #matching}.
+	 *
+	 * @param query what the player typed. Trimmed, case-folded and space-collapsed
+	 *              here; empty matches nothing, because a panel listing all sixteen
+	 *              thousand NPCs is a panel that has not been searched.
 	 * @param limit the most rows to return. {@link Results#getTotal()} still counts
 	 *              the rest, so a truncated list can say it is one.
 	 */
 	Results search(@Nullable String query, int limit)
 	{
-		final String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+		final String needle = normalise(query);
 		if (needle.isEmpty() || limit <= 0)
 		{
 			return new Results(Collections.emptyList(), 0);
 		}
 
+		final List<Match> found = matching(needle);
+		final int total = found.size();
+		return new Results(new ArrayList<>(found.subList(0, Math.min(limit, total))), total);
+	}
+
+	/**
+	 * The monsters a typed name could mean, at the best quality anything matched it.
+	 *
+	 * <p>What the "Plan for" setting resolves through, and the reason it is one
+	 * method rather than an exact lookup: the owner typed "Dagganoth" and nothing
+	 * happened, because an index that only answers to the spelling it holds cannot
+	 * tell a typo from a monster that does not exist.
+	 *
+	 * <p><b>Only the best band is returned, and that is what keeps the ambiguity
+	 * rule intact.</b> An exact match wins outright over the prefixes and near
+	 * misses standing behind it, so "Bear" is still the Bear and not a choice
+	 * between the Bear and the Bear cub. What comes back with more than one row in
+	 * it is a genuine choice between monsters that matched equally well — "spider"
+	 * naming a two-hitpoint Spider and Venenatis at 850, or "dagganoth" naming the
+	 * three Kings, the ordinary Dagannoths and the spawns — and the caller reports
+	 * that rather than picking, because a silent pick is the failure this whole
+	 * class exists to avoid.
+	 */
+	List<Match> resolve(@Nullable String name)
+	{
+		final String needle = normalise(name);
+		if (needle.isEmpty())
+		{
+			return Collections.emptyList();
+		}
+
+		final List<Match> found = matching(needle);
+		if (found.isEmpty())
+		{
+			return Collections.emptyList();
+		}
+
+		final Tier best = found.get(0).getTier();
+		final List<Match> band = new ArrayList<>(found.size());
+		for (Match match : found)
+		{
+			if (match.getTier() != best)
+			{
+				break;
+			}
+			band.add(match);
+		}
+		return Collections.unmodifiableList(band);
+	}
+
+	/**
+	 * Every match for an already-normalised needle, best first.
+	 *
+	 * <p>The near tier is a <b>fallback rather than an addition</b>, and that is a
+	 * decision worth stating. "spid" is one edit from "Spindel", so a near pass that
+	 * always ran would put Spindel in the middle of a search for spiders — a list
+	 * polluted at exactly the moment it was working. It costs nothing to run the
+	 * expensive pass only when the cheap ones found nothing, and what it buys is
+	 * that a query which matches properly is never diluted by one that nearly does.
+	 */
+	private List<Match> matching(String needle)
+	{
 		final List<Match> found = new ArrayList<>();
 		for (Map.Entry<String, List<Group>> entry : byName.entrySet())
 		{
@@ -379,41 +500,31 @@ final class MonsterIndex
 			}
 		}
 
+		if (found.isEmpty())
+		{
+			final int budget = editBudget(needle.length());
+			for (Map.Entry<String, List<Group>> entry : byName.entrySet())
+			{
+				final int distance = prefixDistance(needle, entry.getKey(), budget);
+				if (distance > budget)
+				{
+					continue;
+				}
+				for (Group group : entry.getValue())
+				{
+					found.add(new Match(group.name, group.hitpoints, group.npcIds, Tier.NEAR,
+						distance));
+				}
+			}
+		}
+
 		found.sort(ORDER);
-		final int total = found.size();
-		return new Results(new ArrayList<>(found.subList(0, Math.min(limit, total))), total);
+		return found;
 	}
 
 	/**
-	 * Every monster called exactly {@code name}.
-	 *
-	 * <p>What the "Plan for" setting resolves through. More than one result is the
-	 * umbrella case — "spider" naming several monsters of different sizes — and the
-	 * caller reports that rather than picking, because a settings field has no room
-	 * to offer a choice and a silent pick is the failure this whole class exists to
-	 * avoid.
-	 */
-	List<Match> exactMatches(@Nullable String name)
-	{
-		final String needle = name == null ? "" : name.trim().toLowerCase(Locale.ROOT);
-		final List<Group> groups = needle.isEmpty() ? null : byName.get(needle);
-		if (groups == null)
-		{
-			return Collections.emptyList();
-		}
-
-		final List<Match> out = new ArrayList<>(groups.size());
-		for (Group group : groups)
-		{
-			out.add(new Match(group.name, group.hitpoints, group.npcIds, Tier.EXACT));
-		}
-		out.sort(ORDER);
-		return Collections.unmodifiableList(out);
-	}
-
-	/**
-	 * @return which tier {@code name} matches {@code needle} in, or null for no
-	 * match at all. Both arguments are already lower case.
+	 * @return which of the three cheap tiers {@code name} matches {@code needle} in,
+	 * or null for no match. Both arguments are already {@link #normalise}d.
 	 */
 	@Nullable
 	private static Tier tierOf(String name, String needle)
@@ -430,7 +541,175 @@ final class MonsterIndex
 	}
 
 	/**
-	 * Tier, then name, then size, then lowest id — see {@link #search}.
+	 * How many edits a query of this length is allowed to be wrong by.
+	 *
+	 * <p>Zero below {@link #NEAR_MATCH_MINIMUM} is what switches near matching off
+	 * altogether rather than being a threshold nothing can meet: a distance of zero
+	 * is an exact match, which the cheap tiers already caught, so a budget of zero
+	 * cannot admit anything the pass above did not.
+	 */
+	static int editBudget(int typedLength)
+	{
+		if (typedLength < NEAR_MATCH_MINIMUM)
+		{
+			return 0;
+		}
+		return typedLength < TWO_EDITS_FROM ? 1 : MAX_EDITS;
+	}
+
+	/**
+	 * How many edits turn {@code needle} into the <em>start</em> of {@code name}.
+	 *
+	 * <p>Anchored at the start rather than measured over the whole name, and that is
+	 * the half that makes it useful here. "Dagganoth" against "Dagannoth Rex" scored
+	 * end to end is four characters adrift and would be refused; scored against the
+	 * prefixes of that name it is the two substitutions the player actually made.
+	 * Krystilia's tasks are full of names that are one word plus a qualifier, so a
+	 * query is routinely a prefix of the answer and mistyped as well.
+	 *
+	 * <p>An insertion, a deletion, a substitution or <b>two neighbouring letters the
+	 * wrong way round</b> each count one. The last of those is not a refinement: it
+	 * is the commonest typing mistake there is, and plain Levenshtein charges two for
+	 * it, so a six-letter name typed as "Sipder" would sit outside a one-edit budget
+	 * while a completely different monster two substitutions away sat inside it.
+	 * Counting a swap as the single mistake it was is what makes a tight budget
+	 * affordable.
+	 *
+	 * <p>Computed in a band {@code budget} wide either side of the diagonal. The band
+	 * is not an approximation: a prefix whose length differs from the query's by more
+	 * than {@code budget} needs at least that many insertions or deletions, so
+	 * nothing outside it could have scored within budget anyway. What it buys is a
+	 * fixed handful of cells per character instead of a whole matrix — over sixteen
+	 * thousand names, on the Swing thread, between keystrokes.
+	 *
+	 * @return the distance, or anything above {@code budget} for "further away than
+	 * that". The exact value beyond the budget is not meaningful.
+	 */
+	static int prefixDistance(String needle, String name, int budget)
+	{
+		final int typed = needle.length();
+		final int infinite = budget + 1;
+		if (budget <= 0 || name.length() < typed - budget)
+		{
+			// Too short to reach: turning the needle into any prefix of this name
+			// costs at least one deletion per character it does not have.
+			return infinite;
+		}
+
+		// No prefix longer than this can be within budget, for the same reason.
+		final int limit = Math.min(name.length(), typed + budget);
+
+		// Three rows rather than two, because a swap looks back two of each.
+		int[] older = new int[limit + 1];
+		int[] previous = new int[limit + 1];
+		int[] current = new int[limit + 1];
+		Arrays.fill(older, infinite);
+		for (int j = 0; j <= limit; j++)
+		{
+			previous[j] = Math.min(j, infinite);
+		}
+
+		for (int i = 1; i <= typed; i++)
+		{
+			final int lo = Math.max(0, i - budget);
+			final int hi = Math.min(limit, i + budget);
+
+			// The two cells just outside the band, which still hold whatever an older
+			// row left there. Written rather than read stale — the band shifts one
+			// column per row, so exactly one cell on each side falls out of date, and
+			// filling whole rows instead would undo the point of banding them.
+			if (lo >= 1)
+			{
+				current[lo - 1] = infinite;
+			}
+			if (i + budget <= limit)
+			{
+				previous[i + budget] = infinite;
+			}
+
+			if (lo == 0)
+			{
+				current[0] = Math.min(i, infinite);
+			}
+
+			for (int j = Math.max(1, lo); j <= hi; j++)
+			{
+				final int substitute = previous[j - 1]
+					+ (needle.charAt(i - 1) == name.charAt(j - 1) ? 0 : 1);
+				final int insert = current[j - 1] + 1;
+				final int delete = previous[j] + 1;
+				int best = Math.min(substitute, Math.min(insert, delete));
+
+				if (i > 1 && j > 1
+					&& needle.charAt(i - 1) == name.charAt(j - 2)
+					&& needle.charAt(i - 2) == name.charAt(j - 1))
+				{
+					best = Math.min(best, older[j - 2] + 1);
+				}
+
+				current[j] = Math.min(infinite, best);
+			}
+
+			final int[] recycled = older;
+			older = previous;
+			previous = current;
+			current = recycled;
+		}
+
+		int best = infinite;
+		for (int j = Math.max(0, typed - budget); j <= limit; j++)
+		{
+			best = Math.min(best, previous[j]);
+		}
+		return best;
+	}
+
+	/**
+	 * One spelling of a name, used on both sides of every comparison: lower case,
+	 * trimmed, and runs of whitespace collapsed to a single space.
+	 *
+	 * <p>Both halves earn their place. Case, because it is a string somebody typed
+	 * rather than one the game supplied. Whitespace, because "dagannoth  rex" and a
+	 * name with a trailing space are the same monster and a player who pasted one
+	 * should not be told it does not exist. Done here, once, so that a name stored
+	 * one way and matched another cannot happen — the failure {@link #add}'s
+	 * sanitising note is about, reached through spacing instead of punctuation.
+	 */
+	private static String normalise(@Nullable String text)
+	{
+		if (text == null)
+		{
+			return "";
+		}
+
+		final String lower = text.toLowerCase(Locale.ROOT);
+		final StringBuilder out = new StringBuilder(lower.length());
+		boolean pendingSpace = false;
+		for (int i = 0; i < lower.length(); i++)
+		{
+			final char c = lower.charAt(i);
+			if (Character.isWhitespace(c))
+			{
+				pendingSpace = out.length() > 0;
+				continue;
+			}
+			if (pendingSpace)
+			{
+				out.append(' ');
+				pendingSpace = false;
+			}
+			out.append(c);
+		}
+		return out.toString();
+	}
+
+	/**
+	 * Tier, then how close, then name, then size, then lowest id — see
+	 * {@link #search}.
+	 *
+	 * <p>The distance is second so that a near-miss list runs closest first: a
+	 * player who typed one letter wrong should not have to read past the ones who
+	 * typed two. It is zero on every other tier, so it changes nothing there.
 	 *
 	 * <p>The size is compared ascending rather than descending because a list read
 	 * top to bottom then runs weakest to strongest within a name, which is the
@@ -439,6 +718,7 @@ final class MonsterIndex
 	 */
 	private static final Comparator<Match> ORDER =
 		Comparator.<Match>comparingInt(match -> match.tier.ordinal())
+			.thenComparingInt(Match::getDistance)
 			.thenComparing(match -> match.name, String.CASE_INSENSITIVE_ORDER)
 			.thenComparingInt(Match::getHitpoints)
 			.thenComparingInt(match -> match.npcIds.get(0));

@@ -258,6 +258,25 @@ public class GunnarsToolsPlugin extends Plugin
 	private NpcAmmoRecord adviceLastKill;
 
 	/**
+	 * What is in "Plan for" when it did not resolve to a monster, and null the rest
+	 * of the time.
+	 *
+	 * <p>This is how the settings field points at the surface that can actually
+	 * answer it. A config text field cannot draw a list, cannot offer a choice and
+	 * cannot show its own validation, so the one thing it can usefully do with a name
+	 * it failed on is hand it to the sidebar — which opens with that name already in
+	 * the search box and the candidates underneath it. Without this the player is
+	 * told to pick one in the side panel and then has to retype, from memory, the
+	 * word that has already been established as the one they get wrong.
+	 *
+	 * <p>Volatile because it is written here on the client thread and read by
+	 * {@link MonsterLookupPanel#onActivate()} on Swing's. A {@code String} reference
+	 * is safely published by the write; there is nothing reachable from it to see
+	 * half of.
+	 */
+	private volatile String unresolvedName;
+
+	/**
 	 * Whether {@link #startUp()} has run and {@link #shutDown()} has not yet
 	 * followed it.
 	 *
@@ -1017,10 +1036,13 @@ public class GunnarsToolsPlugin extends Plugin
 				// TripAdvisor.whyPinFailed is what tells them apart.
 				adviceOwner = attribution.getOwner();
 				adviceLastKill = ledger.getMostRecentKill();
-				return TripAdvice.waitingFor(null, TripAdvisor.whyPinFailed(typed, index));
+				unresolvedName = typed;
+				return TripAdvice.waitingFor(null,
+					TripAdvisor.whyPinFailed(typed, index, config.showLookup()));
 			}
 		}
 
+		unresolvedName = null;
 		adviceOwner = attribution.getOwner();
 		adviceLastKill = ledger.getMostRecentKill();
 
@@ -1069,6 +1091,7 @@ public class GunnarsToolsPlugin extends Plugin
 	{
 		adviceOwner = null;
 		adviceLastKill = null;
+		unresolvedName = null;
 		advice = TripAdvice.waitingFor(null, TripAdvice.Waiting.A_TARGET);
 	}
 
@@ -1137,6 +1160,19 @@ public class GunnarsToolsPlugin extends Plugin
 	MonsterCatalogue getCatalogue()
 	{
 		return catalogue;
+	}
+
+	/**
+	 * The name in "Plan for" that did not resolve, or null when it did.
+	 *
+	 * <p>Read on the Swing thread by {@link MonsterLookupPanel#onActivate()}, which
+	 * puts it in the search box so that opening the sidebar after a failed setting
+	 * shows the candidates for what was actually typed. See {@link #unresolvedName}.
+	 */
+	@Nullable
+	String getUnresolvedName()
+	{
+		return unresolvedName;
 	}
 
 	/** Package-private, for {@code GunnarsToolsPluginLifecycleTest}. */

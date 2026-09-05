@@ -2,6 +2,7 @@ package com.matthewmariner.gunnarstools;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Random;
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -86,7 +87,7 @@ public class MonsterIndexTest
 			npc(SPIDER, "Spider", 2),
 			npc(SPIDER + 1, "Spider", 8));
 
-		List<MonsterIndex.Match> matches = index.exactMatches("spider");
+		List<MonsterIndex.Match> matches = index.resolve("spider");
 
 		assertEquals("two sizes are two monsters", 2, matches.size());
 		assertEquals(2, matches.get(0).getHitpoints());
@@ -106,7 +107,7 @@ public class MonsterIndexTest
 			npc(SPIDER, "Spider", 2),
 			npc(SPIDER + 1, "Spider", 2));
 
-		List<MonsterIndex.Match> matches = index.exactMatches("Spider");
+		List<MonsterIndex.Match> matches = index.resolve("Spider");
 
 		assertEquals(1, matches.size());
 		assertEquals(3, matches.get(0).getVariants());
@@ -123,7 +124,7 @@ public class MonsterIndexTest
 			npc(SPINDEL, "Spindel", 200),
 			npc(SPINDEL, "Spindel", 200));
 
-		assertEquals(1, index.exactMatches("Spindel").get(0).getVariants());
+		assertEquals(1, index.resolve("Spindel").get(0).getVariants());
 	}
 
 	@Test
@@ -194,8 +195,8 @@ public class MonsterIndexTest
 		assertEquals(0, index.search("", 10).getTotal());
 		assertEquals(0, index.search("   ", 10).getTotal());
 		assertEquals(0, index.search(null, 10).getTotal());
-		assertTrue(index.exactMatches("").isEmpty());
-		assertTrue(index.exactMatches(null).isEmpty());
+		assertTrue(index.resolve("").isEmpty());
+		assertTrue(index.resolve(null).isEmpty());
 	}
 
 	@Test
@@ -266,8 +267,8 @@ public class MonsterIndexTest
 			new FoughtNpc(FoughtNpc.NO_INDEX, 1, "Unfilled", null),
 			new FoughtNpc(FoughtNpc.NO_INDEX, 2, "One hitpoint", new int[]{70, 70, 70, 1, 1, 70}));
 
-		MonsterIndex.Match unfilled = index.exactMatches("Unfilled").get(0);
-		MonsterIndex.Match single = index.exactMatches("One hitpoint").get(0);
+		MonsterIndex.Match unfilled = index.resolve("Unfilled").get(0);
+		MonsterIndex.Match single = index.resolve("One hitpoint").get(0);
 
 		assertEquals(0, unfilled.getHitpoints());
 		assertFalse(unfilled.hasHitpoints());
@@ -280,8 +281,8 @@ public class MonsterIndexTest
 	{
 		MonsterIndex index = indexOf(npc(SPINDEL, "Spindel", 200));
 
-		assertTrue(index.exactMatches("Spindel").get(0).hasHitpoints());
-		assertEquals(200, index.exactMatches("Spindel").get(0).getHitpoints());
+		assertTrue(index.resolve("Spindel").get(0).hasHitpoints());
+		assertEquals(200, index.resolve("Spindel").get(0).getHitpoints());
 	}
 
 	@Test
@@ -324,7 +325,338 @@ public class MonsterIndexTest
 		MonsterIndex index = indexOf(npc(SPINDEL, "Spindel", 200));
 
 		assertEquals(0, index.search("zulrah", 10).getTotal());
-		assertTrue(index.exactMatches("Zulrah").isEmpty());
+		assertTrue(index.resolve("Zulrah").isEmpty());
+	}
+
+	// --- spelling it wrong -----------------------------------------------------
+
+	/**
+	 * The report this whole pass came from, as an assertion.
+	 *
+	 * <p>He wanted to prepare for the Dagannoth Kings, typed "Dagganoth" — one
+	 * {@code g} too many and one {@code n} too few — and nothing happened. Three
+	 * Kings, an ordinary Dagannoth and a spawn all answer to what he meant, so the
+	 * right result is not one monster: it is all of them, with their own hitpoints
+	 * beside them, for him to pick from.
+	 */
+	@Test
+	public void theTypoThatFoundNothingFindsTheDagannothKings()
+	{
+		MonsterIndex index = dagannoths();
+
+		List<String> found = names(index.search("dagganoth", 20));
+
+		assertTrue("Rex", found.contains("Dagannoth Rex"));
+		assertTrue("Prime", found.contains("Dagannoth Prime"));
+		assertTrue("Supreme", found.contains("Dagannoth Supreme"));
+		assertTrue("and the ordinary ones, which is exactly why picking one would be wrong",
+			found.contains("Dagannoth") && found.contains("Dagannoth spawn"));
+		assertEquals(5, index.search("dagganoth", 20).getTotal());
+	}
+
+	/** And their sizes come with them, which is what tells the Kings from the spawn. */
+	@Test
+	public void everyNearMissCarriesItsOwnSize()
+	{
+		List<MonsterIndex.Match> found = dagannoths().search("dagganoth", 20).getMatches();
+
+		int checked = 0;
+		for (MonsterIndex.Match match : found)
+		{
+			if (match.getName().equals("Dagannoth Rex"))
+			{
+				assertEquals(255, match.getHitpoints());
+				checked++;
+			}
+			if (match.getName().equals("Dagannoth spawn"))
+			{
+				assertEquals("a factor of twenty-five apart, on screen", 10, match.getHitpoints());
+				checked++;
+			}
+		}
+		assertEquals("both rows were actually there to check", 2, checked);
+		assertEquals(MonsterIndex.Tier.NEAR, found.get(0).getTier());
+	}
+
+	/**
+	 * Every keystroke on the way to the word, not only the finished one.
+	 *
+	 * <p>What the owner asked for was autocomplete — "maybe have a fuzzy auto
+	 * complete?" — and a search that only worked once the whole misspelt word had
+	 * been typed would be a list that stayed empty while he typed it and filled in
+	 * at the end. Four characters is where near matching starts; before that the
+	 * prefix tier is doing the work.
+	 */
+	@Test
+	public void theListFillsInAsTheWrongWordIsTyped()
+	{
+		MonsterIndex index = dagannoths();
+
+		for (String typed : Arrays.asList("dagg", "dagga", "daggan", "dagganot", "dagganoth"))
+		{
+			assertTrue("nothing offered after typing \"" + typed + "\"",
+				names(index.search(typed, 20)).contains("Dagannoth Rex"));
+		}
+	}
+
+	/**
+	 * A near miss is a fallback, not an addition, and this is the case that decides
+	 * it: "spid" is one edit from "Spindel", so a near pass that always ran would
+	 * put Spindel in the middle of a search for spiders.
+	 */
+	@Test
+	public void aQueryThatMatchesProperlyIsNotDilutedByOneThatNearlyDoes()
+	{
+		MonsterIndex index = indexOf(
+			npc(SPIDER, "Spider", 2),
+			npc(GIANT_SPIDER, "Giant spider", 5),
+			npc(SPINDEL, "Spindel", 200));
+
+		assertEquals("Spindel is one edit away and must stay out of it",
+			Arrays.asList("Spider", "Giant spider"), names(index.search("spid", 10)));
+		assertEquals("on its own, though, it is found", 1, index.search("spndel", 10).getTotal());
+	}
+
+	@Test
+	public void exactBeatsPrefixBeatsSubstringBeatsNearMiss()
+	{
+		MonsterIndex index = indexOf(
+			npc(1, "Bear", 25),
+			npc(2, "Bear cub", 20),
+			npc(3, "Black bear", 30),
+			npc(4, "Bean", 15));
+
+		// "bear" matches three of them outright, so the fourth never gets a hearing.
+		assertEquals(Arrays.asList("Bear", "Bear cub", "Black bear"),
+			names(index.search("bear", 10)));
+		assertEquals("and on its own, one letter out, it is a near miss",
+			Arrays.asList("Bean"), names(index.search("baen", 10)));
+	}
+
+	@Test
+	public void caseAndStrayWhitespaceAreNotASpellingMistake()
+	{
+		MonsterIndex index = indexOf(npc(2265, "Dagannoth Rex", 255));
+
+		for (String typed : Arrays.asList("  DAGANNOTH   rex ", "dagannoth rex", "DagannothRex"))
+		{
+			assertEquals("\"" + typed + "\" is the same monster",
+				1, index.search(typed, 10).getTotal());
+		}
+		assertEquals(1, index.resolve("  Dagannoth  Rex  ").size());
+	}
+
+	/**
+	 * Three characters have too many neighbours to be a spelling mistake — at one
+	 * edit "rat" reaches "bat", "rats" and "at" — so near matching does not start
+	 * until there is enough typed to mean something.
+	 */
+	@Test
+	public void aQueryTooShortToBeAMisspellingIsNotTreatedAsOne()
+	{
+		MonsterIndex index = indexOf(npc(1, "Rat", 3), npc(2, "Bat", 5));
+
+		assertEquals("bat is one edit from rat and is not offered for it",
+			Arrays.asList("Rat"), names(index.search("rat", 10)));
+	}
+
+	/**
+	 * Two letters the wrong way round is one mistake, not two.
+	 *
+	 * <p>It is also the commonest one. Charged at two — which is what plain
+	 * Levenshtein does — a six-letter name typed as "Sipder" falls outside the
+	 * one-edit budget its length allows, while a completely different monster two
+	 * substitutions away sits inside it. That is the wrong way round.
+	 */
+	@Test
+	public void twoLettersSwappedIsOneMistake()
+	{
+		MonsterIndex index = indexOf(npc(SPIDER, "Spider", 2));
+
+		assertEquals(1, MonsterIndex.prefixDistance("sipder", "spider", 1));
+		assertEquals("six letters gets one edit, and a swap has to fit in it",
+			1, index.search("sipder", 10).getTotal());
+	}
+
+	/**
+	 * The budget is pinned by the literals it is supposed to produce rather than by
+	 * the constants that produce it — a threshold asserted against itself is a
+	 * threshold nothing is holding.
+	 */
+	@Test
+	public void oneEditIsForgivenForAShortNameAndTwoForALongOne()
+	{
+		assertEquals(0, MonsterIndex.editBudget(0));
+		assertEquals(0, MonsterIndex.editBudget(3));
+		assertEquals(1, MonsterIndex.editBudget(4));
+		assertEquals(1, MonsterIndex.editBudget(6));
+		assertEquals("nine letters, two of them wrong: \"Dagganoth\"", 2,
+			MonsterIndex.editBudget(7));
+		assertEquals(2, MonsterIndex.editBudget(9));
+		assertEquals("and never more, however long", 2, MonsterIndex.editBudget(40));
+	}
+
+	@Test
+	public void twoEditsIsTheCeilingAndAThirdIsTooFar()
+	{
+		MonsterIndex index = indexOf(npc(VENENATIS, "Venenatis", 850));
+
+		assertEquals("two wrong letters", 1, index.search("venenatsi", 10).getTotal());
+		assertEquals("three is somebody else's monster", 0, index.search("xxnxnatis", 10).getTotal());
+	}
+
+	/**
+	 * The distance is measured against the <em>start</em> of a name rather than the
+	 * whole of it, which is what lets a one-word query reach a two-word monster.
+	 */
+	@Test
+	public void theDistanceIsToTheStartOfTheNameRatherThanAllOfIt()
+	{
+		assertEquals(2, MonsterIndex.prefixDistance("dagganoth", "dagannoth rex", 2));
+		assertEquals(0, MonsterIndex.prefixDistance("dagannoth", "dagannoth supreme", 2));
+		assertTrue("but the query still has to reach the start of it",
+			MonsterIndex.prefixDistance("rex", "dagannoth rex", 2) > 2);
+	}
+
+	/**
+	 * The band is an optimisation and must not be a behaviour.
+	 *
+	 * <p>{@link MonsterIndex#prefixDistance} computes a fixed few cells per
+	 * character instead of a whole matrix, because sixteen thousand names are
+	 * scanned on the Swing thread between keystrokes. That is only sound if it
+	 * agrees with the matrix everywhere it claims an answer, so it is checked
+	 * against one — over every pair a fixed seed produces, which is a great many
+	 * more than could be written out by hand and is the same list every run.
+	 */
+	@Test
+	public void theBandedDistanceAgreesWithTheWholeMatrix()
+	{
+		final Random random = new Random(1994L);
+		int within = 0;
+		for (int trial = 0; trial < 20000; trial++)
+		{
+			final String needle = word(random, 1 + random.nextInt(12));
+			final String name = word(random, random.nextInt(16));
+			for (int budget = 1; budget <= MonsterIndex.MAX_EDITS; budget++)
+			{
+				final int banded = MonsterIndex.prefixDistance(needle, name, budget);
+				final int matrix = wholeMatrixPrefixDistance(needle, name);
+				if (matrix <= budget)
+				{
+					within++;
+					assertEquals("\"" + needle + "\" against \"" + name + "\" within " + budget,
+						matrix, banded);
+				}
+				else
+				{
+					assertTrue("\"" + needle + "\" against \"" + name + "\" is further than "
+						+ budget, banded > budget);
+				}
+			}
+		}
+		assertTrue("a check where nothing was ever in range would prove nothing", within > 1000);
+	}
+
+	private static String word(Random random, int length)
+	{
+		final String alphabet = "abcde ";
+		final StringBuilder out = new StringBuilder(length);
+		for (int i = 0; i < length; i++)
+		{
+			out.append(alphabet.charAt(random.nextInt(alphabet.length())));
+		}
+		return out.toString();
+	}
+
+	/**
+	 * The obvious algorithm: the whole matrix, minimum over the last row, with the
+	 * same transposition rule spelled out separately from the one under test.
+	 */
+	private static int wholeMatrixPrefixDistance(String needle, String name)
+	{
+		final int rows = needle.length();
+		final int columns = name.length();
+		final int[][] matrix = new int[rows + 1][columns + 1];
+		for (int column = 0; column <= columns; column++)
+		{
+			matrix[0][column] = column;
+		}
+		for (int row = 1; row <= rows; row++)
+		{
+			matrix[row][0] = row;
+			for (int column = 1; column <= columns; column++)
+			{
+				matrix[row][column] = Math.min(
+					matrix[row - 1][column - 1]
+						+ (needle.charAt(row - 1) == name.charAt(column - 1) ? 0 : 1),
+					Math.min(matrix[row - 1][column] + 1, matrix[row][column - 1] + 1));
+
+				if (row > 1 && column > 1
+					&& needle.charAt(row - 1) == name.charAt(column - 2)
+					&& needle.charAt(row - 2) == name.charAt(column - 1))
+				{
+					matrix[row][column] = Math.min(matrix[row][column],
+						matrix[row - 2][column - 2] + 1);
+				}
+			}
+		}
+		int best = Integer.MAX_VALUE;
+		for (int column = 0; column <= columns; column++)
+		{
+			best = Math.min(best, matrix[rows][column]);
+		}
+		return best;
+	}
+
+	// --- what a typed name resolves to -----------------------------------------
+
+	/**
+	 * Only the best band comes back, and that is what keeps the ambiguity rule
+	 * intact through the fuzzy search. An exact match wins outright over the
+	 * prefixes and near misses standing behind it.
+	 */
+	@Test
+	public void anExactMatchIsNotTurnedIntoAChoiceByTheThingsBehindIt()
+	{
+		MonsterIndex index = indexOf(
+			npc(1, "Bear", 25),
+			npc(2, "Bear cub", 20),
+			npc(3, "Beer", 1));
+
+		List<MonsterIndex.Match> resolved = index.resolve("Bear");
+
+		assertEquals("one monster is called Bear", 1, resolved.size());
+		assertEquals("Bear", resolved.get(0).getName());
+	}
+
+	/** And a misspelling that reaches several monsters stays a choice. */
+	@Test
+	public void aMisspellingThatReachesSeveralMonstersIsStillAChoice()
+	{
+		assertEquals(5, dagannoths().resolve("Dagganoth").size());
+	}
+
+	@Test
+	public void aMisspellingThatReachesOneMonsterIsThatMonster()
+	{
+		MonsterIndex index = indexOf(npc(VENENATIS, "Venenatis", 850));
+
+		List<MonsterIndex.Match> resolved = index.resolve("Venenatsi");
+
+		assertEquals(1, resolved.size());
+		assertEquals("Venenatis", resolved.get(0).getName());
+		assertEquals(850, resolved.get(0).getHitpoints());
+	}
+
+	/** The three Kings, the ordinary Dagannoths and the spawns, as the cache holds them. */
+	private static MonsterIndex dagannoths()
+	{
+		return indexOf(
+			npc(2265, "Dagannoth Rex", 255),
+			npc(2266, "Dagannoth Prime", 255),
+			npc(2267, "Dagannoth Supreme", 255),
+			npc(2243, "Dagannoth", 70),
+			npc(2256, "Dagannoth spawn", 10));
 	}
 
 	private static List<String> names(MonsterIndex.Results results)

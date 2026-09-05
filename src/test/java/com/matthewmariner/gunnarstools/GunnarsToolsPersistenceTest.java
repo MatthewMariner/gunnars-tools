@@ -527,7 +527,9 @@ public class GunnarsToolsPersistenceTest
 		config.withPlanFor("Zulrah");
 		plugin.onConfigChanged(configChanged(GunnarsToolsConfig.PLAN_FOR));
 
-		assertEquals(TripAdvice.Waiting.UNKNOWN_MONSTER, plugin.getAdvice().getWaitingFor());
+		// The game's monster list has not been swept here, so the honest report is
+		// about the list rather than about the name — see TripAdvisor.whyPinFailed.
+		assertEquals(TripAdvice.Waiting.MONSTER_LIST, plugin.getAdvice().getWaitingFor());
 		assertNull(plugin.getAdvice().getTarget());
 		assertTrue(plugin.getWithdrawals().isEmpty());
 	}
@@ -539,7 +541,7 @@ public class GunnarsToolsPersistenceTest
 		plugin.startUp();
 		config.withPlanFor("spindel");
 		plugin.onConfigChanged(configChanged(GunnarsToolsConfig.PLAN_FOR));
-		assertEquals(TripAdvice.Waiting.UNKNOWN_MONSTER, plugin.getAdvice().getWaitingFor());
+		assertEquals(TripAdvice.Waiting.MONSTER_LIST, plugin.getAdvice().getWaitingFor());
 
 		kill(plugin, npc(40, SPINDEL, "Spindel", 200), 25L);
 

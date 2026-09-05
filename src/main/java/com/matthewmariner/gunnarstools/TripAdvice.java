@@ -77,6 +77,19 @@ public final class TripAdvice
 		AMBIGUOUS_MONSTER("several monsters match", "pick one in the side panel"),
 
 		/**
+		 * A name is in the "Plan for" setting and the game's monster list has not
+		 * been read yet, so there is nothing to resolve it against.
+		 *
+		 * <p>Not a fact about the monster, which is why it is not
+		 * {@link #UNKNOWN_MONSTER}. The sweep takes a few seconds after login and a
+		 * name typed inside that window used to come back as "no such monster" —
+		 * a message that was wrong, sounded certain, and pointed at the spelling.
+		 * See {@link MonsterCatalogue} on why an empty answer there is "not yet"
+		 * rather than "never".
+		 */
+		MONSTER_LIST("monster list not read yet", "give it a moment"),
+
+		/**
 		 * Estimates are switched off and this monster has not been measured. Said out
 		 * loud rather than shown as "nothing measured", because the fix is a setting
 		 * rather than a kill.

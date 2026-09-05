@@ -158,7 +158,7 @@ public class MonsterLookupTest
 
 		assertNotNull(index);
 		assertEquals("four monsters and not the unnamed id beside them", 4, index.size());
-		assertEquals(850, index.exactMatches("Venenatis").get(0).getHitpoints());
+		assertEquals(850, index.resolve("Venenatis").get(0).getHitpoints());
 	}
 
 	@Test
@@ -202,8 +202,8 @@ public class MonsterLookupTest
 		plugin.config = config.withPlanFor("Venenatis");
 		plugin.startUp();
 
-		assertEquals("before the list is read there is nothing to resolve against",
-			TripAdvice.Waiting.UNKNOWN_MONSTER, plugin.getAdvice().getWaitingFor());
+		assertEquals("before the list is read the honest report is about the list",
+			TripAdvice.Waiting.MONSTER_LIST, plugin.getAdvice().getWaitingFor());
 
 		read(plugin);
 
@@ -236,11 +236,52 @@ public class MonsterLookupTest
 		assertEquals(TripAdvice.Waiting.AMBIGUOUS_MONSTER, plugin.getAdvice().getWaitingFor());
 	}
 
+	/**
+	 * The report, end to end: he typed "Dagganoth" into the settings field, and what
+	 * came back was nothing.
+	 *
+	 * <p>It still does not resolve to one monster, and it must not: three Kings, the
+	 * ordinary Dagannoths and the spawns all answer to what he meant. What changed is
+	 * that the field now knows that, and says which of its failures this is.
+	 */
 	@Test
-	public void aNameNothingAnswersToIsStillATypoRatherThanAChoice()
+	public void theMisspeltNameFromTheReportIsAChoiceRatherThanSilence()
+	{
+		source.with(2265, "Dagannoth Rex", 255)
+			.with(2266, "Dagannoth Prime", 255)
+			.with(2267, "Dagannoth Supreme", 255)
+			.with(2243, "Dagannoth", 70)
+			.with(2256, "Dagannoth spawn", 10);
+
+		GunnarsToolsPlugin plugin = plugin();
+		plugin.config = config.withPlanFor("Dagganoth");
+		plugin.startUp();
+		MonsterIndex index = read(plugin);
+
+		assertEquals(TripAdvice.Waiting.AMBIGUOUS_MONSTER, plugin.getAdvice().getWaitingFor());
+		assertEquals("and the panel has all five of them to offer, misspelt query and all",
+			5, index.search("dagganoth", 20).getTotal());
+		assertEquals("with the field's own text carried across to the search box",
+			"Dagganoth", plugin.getUnresolvedName());
+	}
+
+	@Test
+	public void aTypoWithOnlyOneAnswerIsResolvedRatherThanRefused()
 	{
 		GunnarsToolsPlugin plugin = plugin();
 		plugin.config = config.withPlanFor("Venenatsi");
+		plugin.startUp();
+		read(plugin);
+
+		assertEquals(VENENATIS, plugin.getAdvice().getTarget().getNpcId());
+		assertNull("nothing is left over to carry to the panel", plugin.getUnresolvedName());
+	}
+
+	@Test
+	public void aNameNothingIsCloseToIsStillAMonsterThatDoesNotExist()
+	{
+		GunnarsToolsPlugin plugin = plugin();
+		plugin.config = config.withPlanFor("Zulrah");
 		plugin.startUp();
 		read(plugin);
 
@@ -260,7 +301,9 @@ public class MonsterLookupTest
 		plugin.onConfigChanged(configChanged(GunnarsToolsConfig.SHOW_LOOKUP));
 
 		// Not an assertion that this is nice; it is what the setting's own description
-		// promises, and it is only true if the catalogue went with the button.
+		// promises, and it is only true if the catalogue went with the button. The
+		// report is UNKNOWN_MONSTER rather than MONSTER_LIST because no list is coming:
+		// with the lookup off there is nothing to wait for.
 		assertNull(plugin.getCatalogue().getIndex());
 		assertEquals(TripAdvice.Waiting.UNKNOWN_MONSTER, plugin.getAdvice().getWaitingFor());
 	}
@@ -274,7 +317,7 @@ public class MonsterLookupTest
 		plugin.startUp();
 		MonsterIndex index = read(plugin);
 
-		plugin.planFor(index.exactMatches("Spindel").get(0));
+		plugin.planFor(index.resolve("Spindel").get(0));
 
 		assertEquals("Spindel", config.planFor());
 		assertEquals("5265,Spindel,200", config.pinnedTarget());
@@ -288,7 +331,7 @@ public class MonsterLookupTest
 		GunnarsToolsPlugin plugin = plugin();
 		plugin.startUp();
 		MonsterIndex index = read(plugin);
-		plugin.planFor(index.exactMatches("Spindel").get(0));
+		plugin.planFor(index.resolve("Spindel").get(0));
 
 		plugin.clearPin();
 
@@ -317,7 +360,7 @@ public class MonsterLookupTest
 		plugin.equip(SHORTBOW);
 		plugin.getLedger().apply(Attribution.kill(npc(40, 702, "Bandit", 60), spent(20L), 0));
 
-		MonsterIndex.Match bandit = index.exactMatches("Bandit").get(0);
+		MonsterIndex.Match bandit = index.resolve("Bandit").get(0);
 		assertEquals(3, bandit.getVariants());
 
 		plugin.planFor(bandit);
@@ -337,7 +380,7 @@ public class MonsterLookupTest
 		plugin.getCatalogue().clear();
 		MonsterIndex index = read(plugin);
 
-		plugin.planFor(index.exactMatches("Bandit").get(0));
+		plugin.planFor(index.resolve("Bandit").get(0));
 
 		assertEquals("the lowest id, whatever order the sweep found them in",
 			700, plugin.getAdvice().getTarget().getNpcId());
@@ -374,7 +417,7 @@ public class MonsterLookupTest
 		plugin.config = config.withPlanFor("Nothing at all");
 		plugin.startUp();
 
-		assertEquals(TripAdvice.Waiting.UNKNOWN_MONSTER.getHeadline(),
+		assertEquals(TripAdvice.Waiting.MONSTER_LIST.getHeadline(),
 			panel.latest().get(0).getLeft());
 	}
 }

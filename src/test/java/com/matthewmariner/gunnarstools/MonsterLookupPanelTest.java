@@ -229,7 +229,7 @@ public class MonsterLookupPanelTest
 		readTheList();
 		MonsterLookupPanel panel = new MonsterLookupPanel(plugin);
 
-		type(panel, "venenatsi");
+		type(panel, "zulrah");
 
 		assertTrue(textOf(panel).contains(LookupPrompt.NO_MATCH));
 	}

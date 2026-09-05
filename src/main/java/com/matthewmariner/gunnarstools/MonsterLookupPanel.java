@@ -130,15 +130,33 @@ class MonsterLookupPanel extends PluginPanel
 	}
 
 	/**
-	 * Opened from the toolbar: redraw, and put the caret in the search box.
+	 * Opened from the toolbar: carry over whatever the settings field could not
+	 * resolve, redraw, and put the caret in the search box.
 	 *
 	 * <p>The focus is not a flourish. The panel opens because somebody wants to
 	 * type a name into it, and a search box that has to be clicked first is one more
 	 * step between "I'm lost" and an answer.
+	 *
+	 * <p><b>The carry-over is this panel's half of "one front door".</b> The owner
+	 * typed a monster's name into the settings field, because that is where you go
+	 * when you open a plugin's settings, and a text field there cannot draw a list or
+	 * offer a choice. What it can do is hand the name over: a player who is told to
+	 * pick one in the side panel arrives with that name already searched, rather than
+	 * having to retype from memory the word already established as the one they get
+	 * wrong. Only into an empty box — whatever is being typed here now outranks
+	 * anything a setting had to say.
 	 */
 	@Override
 	public void onActivate()
 	{
+		final String carried = plugin.getUnresolvedName();
+		if (carried != null && !carried.isEmpty() && search.getText().trim().isEmpty())
+		{
+			// Fires the document listener, which redraws; the call below is what makes
+			// that an implementation detail rather than something to rely on.
+			search.setText(carried);
+		}
+
 		redraw();
 		search.requestFocusInWindow();
 	}
