@@ -69,8 +69,6 @@ class MonsterLookupPanel extends PluginPanel
 	 */
 	private static final int MAX_ROWS = 20;
 
-	private static final Color CAVEAT_COLOUR = new Color(0xFF, 0xC1, 0x07);
-
 	private final GunnarsToolsPlugin plugin;
 
 	private final IconTextField search = new IconTextField();
@@ -227,12 +225,13 @@ class MonsterLookupPanel extends PluginPanel
 		// Matched by name rather than "not NONE", so an action added later is inert
 		// here until somebody wires it up, rather than silently unpinning.
 		final boolean clickable = line.getAction() == LookupSummary.Action.CLEAR_PIN;
-		final Color colour = line.isCaveat() ? CAVEAT_COLOUR
+		final Color colour = line.isCaveat() ? ColorScheme.PROGRESS_INPROGRESS_COLOR
 			: clickable ? ColorScheme.BRAND_ORANGE : ColorScheme.LIGHT_GRAY_COLOR;
 
 		final JLabel left = new JLabel(line.getLeft());
 		left.setFont(FontManager.getRunescapeSmallFont());
-		left.setForeground(line.isCaveat() ? CAVEAT_COLOUR : ColorScheme.LIGHT_GRAY_COLOR);
+		left.setForeground(line.isCaveat()
+			? ColorScheme.PROGRESS_INPROGRESS_COLOR : ColorScheme.LIGHT_GRAY_COLOR);
 		panel.add(left, BorderLayout.WEST);
 
 		if (!line.getRight().isEmpty())
@@ -290,7 +289,8 @@ class MonsterLookupPanel extends PluginPanel
 			? match.getHitpoints() + " hp"
 			: "hp unknown");
 		size.setFont(FontManager.getRunescapeSmallFont());
-		size.setForeground(match.hasHitpoints() ? ColorScheme.LIGHT_GRAY_COLOR : CAVEAT_COLOUR);
+		size.setForeground(match.hasHitpoints()
+			? ColorScheme.LIGHT_GRAY_COLOR : ColorScheme.PROGRESS_INPROGRESS_COLOR);
 		panel.add(size, BorderLayout.EAST);
 
 		if (match.getVariants() > 1)
