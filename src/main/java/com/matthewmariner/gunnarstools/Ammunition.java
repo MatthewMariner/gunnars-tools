@@ -29,10 +29,9 @@ package com.matthewmariner.gunnarstools;
  * plugin rests on. That is an unverified claim about the game and it is not what
  * the wiki says: Items Kept on Death ranks candidates in order of value, first by
  * effective Grand Exchange value and then by alchemy value, with no mention of
- * stacks, quantity or unit price and no ammunition row. The sibling
- * {@code ../dangerous-teleport} declines to subtract keep slots on the same
- * unverified ranking — see its {@code RiskAssessment} javadoc — and this file
- * should not have been leaning on the mirror image of it. Nothing in the code
+ * stacks, quantity or unit price and no ammunition row. A sibling plugin, since
+ * retired, declined to subtract keep slots on that same unverified ranking, and
+ * this file should not have been leaning on the mirror image of it. Nothing in the code
  * changes: stackability is a good filter for "did a quantity move for a reason
  * worth counting" whatever death does with the stack afterwards.
  *
