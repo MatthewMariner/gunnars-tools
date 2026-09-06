@@ -11,7 +11,7 @@ It reads only your own inventory and equipment; nothing about anyone else.
 [![RuneLite](https://img.shields.io/badge/RuneLite-1.12.38-blue)](https://runelite.net)
 [![Java](https://img.shields.io/badge/Java-11-orange)](https://runelite.net)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-518-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-519-brightgreen)](#development)
 
 </div>
 
@@ -320,7 +320,7 @@ its basis attached, and pasting a stretch of that log almost always settles it.
 
 ```bash
 ./gradlew build   # compile + package; also proves the JDK + wrapper work
-./gradlew test    # runs the 518-test JUnit suite
+./gradlew test    # runs the 519-test JUnit suite
 ./gradlew run     # launches a full RuneLite dev client with the plugin loaded
 ```
 
