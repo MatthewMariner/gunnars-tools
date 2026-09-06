@@ -94,23 +94,36 @@ public class ListingMetadataTest
 		assertEquals(GunnarsToolsPlugin.class.getName(), listing().getProperty("plugins"));
 	}
 
+	/**
+	 * The literal values {@code runelite/example-plugin} ships. Compared exactly rather than
+	 * searched for as substrings: an earlier version of this test rejected any value
+	 * <em>containing</em> "example", which is a heuristic standing in for a fact and would one
+	 * day fail a perfectly good description — "…for example, a rune platebody" is an ordinary
+	 * sentence to write about this plugin. A placeholder is not a value that mentions the
+	 * template, it is a value that <em>is</em> the template.
+	 */
+	private static final String[] TEMPLATE_PLACEHOLDERS =
+		{"example", "example plugin", "your name", "todo"};
+
 	@Test
 	public void noFieldTheHubRefusesToPackageIsLeftAtItsTemplateValue() throws IOException
 	{
 		Properties listing = listing();
 
-		// The example-plugin template ships these three with placeholder text, and a
-		// placeholder is a packager failure rather than a style problem. `version` is
-		// the one field that is correctly left empty — the hub falls back to the commit.
+		// The template ships these three with placeholder text, and a placeholder is a
+		// packager failure rather than a style problem. `version` is the one field that is
+		// correctly left empty — the hub falls back to the commit.
 		for (String field : new String[]{"displayName", "author", "description"})
 		{
 			String value = listing.getProperty(field);
 			assertNotNull(field + " is missing", value);
 			assertFalse(field + " is empty", value.trim().isEmpty());
-			assertFalse(field + " still holds the template's placeholder",
-				value.toLowerCase().contains("example")
-					|| value.toLowerCase().contains("your name")
-					|| value.toLowerCase().contains("todo"));
+
+			for (String placeholder : TEMPLATE_PLACEHOLDERS)
+			{
+				assertFalse(field + " is still the template's placeholder: " + placeholder,
+					placeholder.equalsIgnoreCase(value.trim()));
+			}
 		}
 
 		assertEquals("build must be `standard` — the hub substitutes its own build.gradle",
