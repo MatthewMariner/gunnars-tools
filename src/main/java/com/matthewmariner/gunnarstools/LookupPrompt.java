@@ -79,6 +79,30 @@ final class LookupPrompt
 	}
 
 	/**
+	 * The line above a list that answered a nickname rather than the name typed.
+	 *
+	 * <p>Said rather than swallowed, for the same reason {@link #truncation}
+	 * exists: a rewrite the player cannot see is a search that looks like it
+	 * ignored what they typed. Every row {@link MonsterIndex.Match} draws already
+	 * looks identical whether it was found by name or by nickname — the tier is on
+	 * the match, not on the panel — so this is the only place that fact reaches the
+	 * screen at all. "abby demon" resolving to Abyssal demon and staying silent
+	 * about it would read as the panel answering a different question than the one
+	 * asked, when what it actually did was translate a word it already knew.
+	 *
+	 * @return the notice, naming what the query was rewritten to, or null when
+	 * {@link MonsterIndex.Results#isViaAlias()} is false and nothing needs saying
+	 */
+	@Nullable
+	static LookupSummary.Line aliasNotice(MonsterIndex.Results results)
+	{
+		final String aliasedQuery = results.getAliasedQuery();
+		return aliasedQuery == null
+			? null
+			: new LookupSummary.Line("showing matches for \"" + aliasedQuery + "\"", "", true);
+	}
+
+	/**
 	 * The line above a truncated results list.
 	 *
 	 * <p>Said rather than swallowed. A panel that drew the first twenty of two

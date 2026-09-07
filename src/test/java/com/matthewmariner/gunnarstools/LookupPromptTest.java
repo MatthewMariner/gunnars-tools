@@ -117,6 +117,35 @@ public class LookupPromptTest
 		assertTrue("a list that looks complete and is not is the failure", line.isCaveat());
 	}
 
+	// --- the alias notice -------------------------------------------------------
+
+	/**
+	 * A rewrite the player cannot see is a search that looks like it ignored what
+	 * they typed — see {@link MonsterAliases}'s class javadoc for the report this
+	 * traces back to.
+	 */
+	@Test
+	public void anAliasedResultSaysWhatItActuallySearchedFor()
+	{
+		MonsterIndex.Results aliased = new MonsterIndex.Results(
+			Collections.singletonList(match("Abyssal demon", 150)), 1, "abyssal demon");
+
+		LookupSummary.Line line = LookupPrompt.aliasNotice(aliased);
+
+		assertNotNull(line);
+		assertEquals("showing matches for \"abyssal demon\"", line.getLeft());
+		assertTrue("a rewrite is an aside, not a number to act on", line.isCaveat());
+	}
+
+	@Test
+	public void aResultFoundByNameSaysNothingAboutBeingRewritten()
+	{
+		MonsterIndex.Results found = new MonsterIndex.Results(
+			Collections.singletonList(match("Venenatis", 850)), 1);
+
+		assertNull(LookupPrompt.aliasNotice(found));
+	}
+
 	private static MonsterIndex.Match match(String name, int hitpoints)
 	{
 		return new MonsterIndex.Match(name, hitpoints, Collections.singletonList(1),

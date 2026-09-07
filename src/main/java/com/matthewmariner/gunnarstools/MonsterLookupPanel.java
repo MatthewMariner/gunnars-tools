@@ -190,6 +190,12 @@ class MonsterLookupPanel extends PluginPanel
 			results.add(row(line));
 		}
 
+		final LookupSummary.Line aliased = LookupPrompt.aliasNotice(found);
+		if (aliased != null)
+		{
+			results.add(row(aliased));
+		}
+
 		final LookupSummary.Line truncated = LookupPrompt.truncation(found);
 		if (truncated != null)
 		{

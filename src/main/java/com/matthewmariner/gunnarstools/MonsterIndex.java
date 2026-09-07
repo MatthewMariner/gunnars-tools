@@ -93,7 +93,18 @@ final class MonsterIndex
 		 * The name starts with something close enough to what was typed.
 		 * "Dagannoth Rex" for "dagganoth" — see {@link #prefixDistance}.
 		 */
-		NEAR
+		NEAR,
+
+		/**
+		 * Found only after a slang word somewhere in the query was rewritten to a
+		 * real one — see {@link MonsterAliases} and {@link #matching}. Ranked after
+		 * every tier above and never disguised as one of them: {@link #EXACT} means
+		 * the cache's own spelling was typed, and "abby demon" resolving to Abyssal
+		 * demon is not that, however confidently it resolves. A caller that cannot
+		 * tell an alias hit from a real one cannot tell the player either — see
+		 * {@code LookupPrompt#aliasNotice}.
+		 */
+		ALIAS
 	}
 
 	/**
@@ -235,11 +246,24 @@ final class MonsterIndex
 	{
 		private final List<Match> matches;
 		private final int total;
+		@Nullable
+		private final String aliasedQuery;
 
 		Results(List<Match> matches, int total)
 		{
+			this(matches, total, null);
+		}
+
+		/**
+		 * @param aliasedQuery what the query was rewritten to before it found these
+		 *                     matches, or null if it matched as typed — see
+		 *                     {@link #getAliasedQuery()}
+		 */
+		Results(List<Match> matches, int total, @Nullable String aliasedQuery)
+		{
 			this.matches = Collections.unmodifiableList(matches);
 			this.total = total;
+			this.aliasedQuery = aliasedQuery;
 		}
 
 		/** At most the limit the caller asked for, best match first. */
@@ -258,6 +282,30 @@ final class MonsterIndex
 		boolean isTruncated()
 		{
 			return matches.size() < total;
+		}
+
+		/**
+		 * What the query was rewritten to by {@link MonsterAliases} before these
+		 * matches were found, or null if the query the player typed found them
+		 * directly and nothing was rewritten.
+		 *
+		 * <p>Carried on the result rather than left for the caller to recompute,
+		 * because the caller — {@code MonsterLookupPanel} — has no other way to know
+		 * a rewrite happened at all: every {@link Match} it draws already looks like
+		 * an ordinary row. Displaying that fact is what {@code LookupPrompt
+		 * #aliasNotice} exists for; a rewrite the player cannot see is a search that
+		 * appears to have ignored what they typed.
+		 */
+		@Nullable
+		String getAliasedQuery()
+		{
+			return aliasedQuery;
+		}
+
+		/** Whether {@link #getMatches()} answered a nickname rather than a name. */
+		boolean isViaAlias()
+		{
+			return aliasedQuery != null;
 		}
 	}
 
@@ -426,7 +474,17 @@ final class MonsterIndex
 
 		final List<Match> found = matching(needle);
 		final int total = found.size();
-		return new Results(new ArrayList<>(found.subList(0, Math.min(limit, total))), total);
+
+		// Recomputed rather than threaded back out of matching() itself: whether the
+		// first row is Tier.ALIAS already says a rewrite happened, and MonsterAliases
+		// .expand is a pure function of the needle, so asking it again for the string
+		// to show is cheaper than giving every caller of matching() a second return
+		// value it does not need.
+		final String aliasedQuery = !found.isEmpty() && found.get(0).getTier() == Tier.ALIAS
+			? MonsterAliases.expand(needle)
+			: null;
+		return new Results(new ArrayList<>(found.subList(0, Math.min(limit, total))), total,
+			aliasedQuery);
 	}
 
 	/**
@@ -446,6 +504,17 @@ final class MonsterIndex
 	 * three Kings, the ordinary Dagannoths and the spawns — and the caller reports
 	 * that rather than picking, because a silent pick is the failure this whole
 	 * class exists to avoid.
+	 *
+	 * <p><b>Unlike {@link #search}, nothing here says whether a nickname settled
+	 * it.</b> {@link Results#isViaAlias()} exists because {@code MonsterLookupPanel}
+	 * has no other way to tell a player their query was rewritten; a bare {@code
+	 * List<Match>} has no equivalent slot, and this deliberately does not grow one.
+	 * The gap is narrower than it looks: the caller is the "Plan for" setting field,
+	 * which — unlike a search box a player is still looking at — shows the plan it
+	 * settled on afterward, real name and all, so a rewrite here is not hidden, only
+	 * unannounced at the moment it happens. Adding a signal this method's one
+	 * caller has never needed would be a wart grown for a design worry rather than
+	 * a real one.
 	 */
 	List<Match> resolve(@Nullable String name)
 	{
@@ -475,7 +544,92 @@ final class MonsterIndex
 	}
 
 	/**
-	 * Every match for an already-normalised needle, best first.
+	 * Every match for an already-normalised needle, best first — trying the
+	 * needle as typed, and only ever falling back to {@link MonsterAliases} if
+	 * that came back with nothing at all.
+	 *
+	 * <p><b>The alias pass is a fallback behind a fallback, and the rule is the
+	 * same as the near tier's: it runs only when {@link #matchingWithoutAlias}
+	 * found nothing whatsoever.</b> That single rule is what guarantees every
+	 * search this project already had keeps working unchanged — a real name, a
+	 * typo the near tier already forgives, always wins outright over a nickname
+	 * standing behind it, because a nickname is never even consulted while either
+	 * of those has an answer. "abby" alone is already a near match for both Abyssal
+	 * demon and Abyssal Sire, so it is never routed through here at all; "abby
+	 * demon" is, because the extra word he typed correctly made the whole-string
+	 * near match worse rather than better.
+	 *
+	 * <p>What runs on a miss is not a second matcher. {@link MonsterAliases#expand}
+	 * rewrites the slang tokens in the needle to a distinctive token of the real
+	 * name and the rewritten needle is handed straight back to
+	 * {@link #matchingWithoutAlias} — the exact same three cheap tiers and the same
+	 * near fallback, on a different string. Every {@link Match} that comes back is
+	 * then relabelled {@link Tier#ALIAS} rather than left as whatever tier the
+	 * rewritten string happened to hit, because the caller needs to know a
+	 * nickname was involved and {@link Tier#EXACT} would be a lie about that.
+	 *
+	 * <p><b>Relabelling is a rename, never a reorder.</b> {@link #matchingWithoutAlias}
+	 * already sorted {@code viaAlias} by the real tier it matched at and, within a
+	 * tier, by how close — that ordering is sorted out before either of the two
+	 * facts it depends on gets thrown away, which is what makes it safe to carry
+	 * forward rather than recompute. The distance travels onto the relabelled
+	 * {@link Match} unchanged rather than being zeroed, and the relabelled list is
+	 * <em>not</em> sorted a second time: every relabelled match shares the same
+	 * {@link Tier#ALIAS}, so re-running {@link #ORDER} over them would have nothing
+	 * left to compare but distance and name — which is exactly backwards when two
+	 * matches came from different original tiers (both reported as distance zero,
+	 * so a real order between them is only visible before relabelling) and exactly
+	 * wrong when two came from the near tier at different distances, either way
+	 * replacing "how well each one actually matched" with alphabetical order. Two
+	 * table entries expanding to two different tiers, or one expansion the near
+	 * tier reaches by more than one distance, are the cases this matters for, and
+	 * it is only dormant today because the seven shipped entries happen not to
+	 * produce either mix.
+	 */
+	private List<Match> matching(String needle)
+	{
+		final List<Match> found = matchingWithoutAlias(needle);
+		if (!found.isEmpty())
+		{
+			return found;
+		}
+
+		final String aliased = MonsterAliases.expand(needle);
+		if (aliased.equals(needle))
+		{
+			// Nothing in the query was a known nickname — the miss stands.
+			return found;
+		}
+
+		final List<Match> viaAlias = matchingWithoutAlias(aliased);
+		if (viaAlias.isEmpty())
+		{
+			return viaAlias;
+		}
+
+		// Already ordered by the tier and distance the rewritten string actually
+		// matched at, before either is discarded below — matchingWithoutAlias sorts
+		// with this same ORDER before returning. A defensive copy rather than a
+		// trust that the list handed back stays sorted forever: the sort this
+		// method's ordering guarantee rests on has to be visible at the point it is
+		// relied on, not three calls away in a method nothing here should have to
+		// re-read to believe.
+		final List<Match> byOriginalOrder = new ArrayList<>(viaAlias);
+		byOriginalOrder.sort(ORDER);
+
+		final List<Match> relabelled = new ArrayList<>(byOriginalOrder.size());
+		for (Match match : byOriginalOrder)
+		{
+			relabelled.add(new Match(match.getName(), match.getHitpoints(), match.getNpcIds(),
+				Tier.ALIAS, match.getDistance()));
+		}
+		return relabelled;
+	}
+
+	/**
+	 * The three cheap tiers, then the near tier if those found nothing — every
+	 * match for {@code needle} exactly as typed, with no knowledge that
+	 * {@link #matching} might try it again through {@link MonsterAliases}.
 	 *
 	 * <p>The near tier is a <b>fallback rather than an addition</b>, and that is a
 	 * decision worth stating. "spid" is one edit from "Spindel", so a near pass that
@@ -484,7 +638,7 @@ final class MonsterIndex
 	 * expensive pass only when the cheap ones found nothing, and what it buys is
 	 * that a query which matches properly is never diluted by one that nearly does.
 	 */
-	private List<Match> matching(String needle)
+	private List<Match> matchingWithoutAlias(String needle)
 	{
 		final List<Match> found = new ArrayList<>();
 		for (Map.Entry<String, List<Group>> entry : byName.entrySet())

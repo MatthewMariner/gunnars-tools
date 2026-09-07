@@ -7,6 +7,7 @@ import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -653,6 +654,169 @@ public class MonsterIndexTest
 		assertEquals(1, resolved.size());
 		assertEquals("Venenatis", resolved.get(0).getName());
 		assertEquals(850, resolved.get(0).getHitpoints());
+	}
+
+	// --- nicknames ---------------------------------------------------------------
+
+	/**
+	 * The report this whole file — and {@link MonsterAliases} — exists for. "abby"
+	 * alone already finds both Abyssal monsters through the near tier; adding the
+	 * word he typed correctly, "demon", made the whole-string near match worse
+	 * rather than better, and the raw query found nothing at all. The alias tier
+	 * is what finds it instead.
+	 */
+	@Test
+	public void aNicknamePlusARealWordFindsTheMonsterTheRawQueryMissed()
+	{
+		MonsterIndex index = indexOf(
+			npc(1, "Abyssal demon", 150),
+			npc(2, "Abyssal Sire", 350));
+
+		MonsterIndex.Results found = index.search("abby demon", 10);
+
+		assertEquals("only Abyssal demon answers to \"abyssal demon\" once rewritten",
+			1, found.getTotal());
+		assertEquals("Abyssal demon", found.getMatches().get(0).getName());
+		assertEquals(MonsterIndex.Tier.ALIAS, found.getMatches().get(0).getTier());
+		assertEquals("abyssal demon", found.getAliasedQuery());
+		assertTrue(found.isViaAlias());
+	}
+
+	/** Case never mattered for a real name, and it does not start mattering for a nickname. */
+	@Test
+	public void aNicknameIsCaseInsensitiveLikeEverythingElseHere()
+	{
+		MonsterIndex index = indexOf(npc(1, "Abyssal demon", 150));
+
+		assertEquals(1, index.search("Abby Demon", 10).getTotal());
+		assertEquals(1, index.search("ABBY DEMON", 10).getTotal());
+	}
+
+	/**
+	 * Rule 1, as a test: a query the raw tiers already answer must never be routed
+	 * through the alias table, however tempting a rewrite would be. "abby" alone is
+	 * already a near match for both names below, so the alias tier — which would
+	 * relabel them {@link MonsterIndex.Tier#ALIAS} — must never even run.
+	 */
+	@Test
+	public void aBareNicknameThatAlreadyMatchesNeverTouchesTheAliasTier()
+	{
+		MonsterIndex index = indexOf(
+			npc(1, "Abyssal demon", 150),
+			npc(2, "Abyssal Sire", 350));
+
+		MonsterIndex.Results found = index.search("abby", 10);
+
+		assertEquals(2, found.getTotal());
+		assertFalse("the raw search already answered; nothing was aliased",
+			found.isViaAlias());
+		for (MonsterIndex.Match match : found.getMatches())
+		{
+			assertNotEquals("a match the raw tiers already found must not be relabelled",
+				MonsterIndex.Tier.ALIAS, match.getTier());
+		}
+	}
+
+	/** An umbrella abbreviation resolves to the whole umbrella, same as the full word would. */
+	@Test
+	public void anAbbreviationOfAnUmbrellaNameFindsTheWholeUmbrella()
+	{
+		MonsterIndex.Results found = dagannoths().search("dks", 20);
+
+		assertEquals(5, found.getTotal());
+		assertEquals("dagannoth", found.getAliasedQuery());
+		assertTrue(names(found).contains("Dagannoth Rex"));
+		assertTrue(names(found).contains("Dagannoth spawn"));
+	}
+
+	@Test
+	public void bandosFindsGeneralGraardorByTheGodsFactionRatherThanTheBossesName()
+	{
+		MonsterIndex index = indexOf(npc(1, "General Graardor", 750));
+
+		MonsterIndex.Results found = index.search("bandos", 10);
+
+		assertEquals(1, found.getTotal());
+		assertEquals("General Graardor", found.getMatches().get(0).getName());
+	}
+
+	/** A query that is neither a real name nor a known nickname stays a miss. */
+	@Test
+	public void aQueryThatIsNeitherARealNameNorAKnownNicknameStaysEmpty()
+	{
+		MonsterIndex index = indexOf(npc(VENENATIS, "Venenatis", 850));
+
+		assertEquals(0, index.search("qzjxv wjk", 10).getTotal());
+	}
+
+	/** {@link MonsterIndex#resolve} shares the same fallback, so a nickname settles too. */
+	@Test
+	public void resolveAlsoSettlesANicknameWhenOnlyOneMonsterAnswersToIt()
+	{
+		MonsterIndex index = indexOf(npc(1, "General Graardor", 750));
+
+		List<MonsterIndex.Match> resolved = index.resolve("bandos");
+
+		assertEquals(1, resolved.size());
+		assertEquals("General Graardor", resolved.get(0).getName());
+	}
+
+	@Test
+	public void aResultFoundByNameAloneDoesNotClaimToBeAliased()
+	{
+		MonsterIndex index = indexOf(npc(VENENATIS, "Venenatis", 850));
+
+		MonsterIndex.Results found = index.search("venenatis", 10);
+
+		assertFalse(found.isViaAlias());
+		assertNull(found.getAliasedQuery());
+	}
+
+	@Test
+	public void theAliasTierIsRankedAfterEveryOtherTier()
+	{
+		assertTrue(MonsterIndex.Tier.ALIAS.ordinal() > MonsterIndex.Tier.NEAR.ordinal());
+		assertTrue(MonsterIndex.Tier.ALIAS.ordinal() > MonsterIndex.Tier.CONTAINS.ordinal());
+		assertTrue(MonsterIndex.Tier.ALIAS.ordinal() > MonsterIndex.Tier.PREFIX.ordinal());
+		assertTrue(MonsterIndex.Tier.ALIAS.ordinal() > MonsterIndex.Tier.EXACT.ordinal());
+	}
+
+	/**
+	 * Relabelling every alias hit to {@link MonsterIndex.Tier#ALIAS} must not throw
+	 * away the ordering the underlying tiers already established. Neither name below
+	 * is found by any cheap tier for "dagannoth" — {@code dks} expands to — so both
+	 * are near-tier matches only, one edit away and two edits away respectively, and
+	 * they are named so that alphabetical order disagrees with distance order:
+	 * "Aaxannoth Prime" sorts first alphabetically, but "Zagannoth Rex" is one edit
+	 * away rather than two and must be listed first regardless. A relabelling that
+	 * zeroed the distance and re-sorted the (now uniformly ALIAS, uniformly zero)
+	 * list would have nothing left to order by except name, and would get this
+	 * backwards.
+	 */
+	@Test
+	public void aliasRelabellingKeepsTheCloserNearTierMatchFirst()
+	{
+		// Pinned against the real distances so this test fails loudly, rather than
+		// passing by accident, the day the near tier's budget or transposition rule
+		// changes and these two stop being one and two edits away.
+		assertEquals(1, MonsterIndex.prefixDistance(
+			"dagannoth", "zagannoth rex", MonsterIndex.MAX_EDITS));
+		assertEquals(2, MonsterIndex.prefixDistance(
+			"dagannoth", "aaxannoth prime", MonsterIndex.MAX_EDITS));
+
+		MonsterIndex index = indexOf(
+			npc(1, "Zagannoth Rex", 255),
+			npc(2, "Aaxannoth Prime", 255));
+
+		MonsterIndex.Results found = index.search("dks", 10);
+
+		assertTrue("dks has no cheap-tier match of its own; only the alias reaches these",
+			found.isViaAlias());
+		assertEquals("the one-edit match must lead, however the names alphabetise",
+			Arrays.asList("Zagannoth Rex", "Aaxannoth Prime"), names(found));
+		assertEquals("the underlying distance survives relabelling rather than reading zero",
+			1, found.getMatches().get(0).getDistance());
+		assertEquals(2, found.getMatches().get(1).getDistance());
 	}
 
 	/** The three Kings, the ordinary Dagannoths and the spawns, as the cache holds them. */

@@ -222,6 +222,27 @@ public class MonsterLookupPanelTest
 		assertFalse("and a monster that does not match is not drawn", text.contains("Venenatis"));
 	}
 
+	/**
+	 * The report this feature traces back to, drawn end to end: a nickname the raw
+	 * search cannot place still finds its monster, and the panel says it took a
+	 * detour to get there rather than presenting the row as an exact match.
+	 */
+	@Test
+	public void typingANicknameFindsTheMonsterAndSaysTheSearchWasRewritten()
+	{
+		source.with(415, "Abyssal demon", 150);
+		plugin();
+		readTheList();
+		MonsterLookupPanel panel = new MonsterLookupPanel(plugin);
+
+		type(panel, "abby demon");
+
+		List<String> text = textOf(panel);
+		assertTrue("the monster itself is drawn", text.contains("Abyssal demon"));
+		assertTrue("and the panel says it took a detour to find it",
+			text.contains("showing matches for \"abyssal demon\""));
+	}
+
 	@Test
 	public void aNameNothingAnswersToSaysSoRatherThanGoingBlank()
 	{

@@ -11,7 +11,7 @@ It reads only your own inventory and equipment; nothing about anyone else.
 [![RuneLite](https://img.shields.io/badge/RuneLite-1.12.38-blue)](https://runelite.net)
 [![Java](https://img.shields.io/badge/Java-11-orange)](https://runelite.net)
 [![License](https://img.shields.io/badge/license-BSD--2--Clause-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-524-brightgreen)](#development)
+[![Tests](https://img.shields.io/badge/tests-545-brightgreen)](#development)
 
 </div>
 
@@ -118,6 +118,41 @@ wrong letter in a short name, two in a longer one, with a pair of letters typed
 the wrong way round counting as one mistake rather than two. Case and stray
 spaces never matter. Because the close matches are a last resort, a search that
 was already working is never diluted: `spid` gives you spiders, not Spindel.
+
+### Nicknames work too
+
+Wilderness and Slayer bosses are routinely called something other than their
+name, and typing it used to find nothing. `abby demon` is the report that started
+this: `abby` alone already worked, but the second word — spelled correctly — made
+a fuzzy match on the whole phrase *worse*, not better, because forgiving
+misspellings was never going to forgive a different word. A short table of slang
+fixes that:
+
+```
+[ abby demon                ]
+
+showing matches for "abyssal demon"
+
+Abyssal demon         150 hp
+```
+
+`dks`, `kq`, `kbd`, `bandos`, `zammy` and `venny` work the same way — seven
+nicknames in total counting `abby` above — each rewriting to a distinctive word
+of the real name and letting the ordinary search above find it from there, so a
+Kalphite Queen or a God Wars boss known only by its faction's nickname is still
+one search away. Only tried when the name as typed finds nothing at all, so
+nothing here ever changes an answer that already worked — a real name, or a
+misspelling the fuzzy match above already forgives, always wins. When a
+nickname is what found the list, the panel says so, because a rewrite you can't
+see is a search that looks like it ignored you.
+
+Two faction nicknames you won't find on that list: Saradomin's `sara` and
+Armadyl's `arma`. Both are prefixes of an entirely ordinary NPC's name —
+Saradomin **priest**, Armadyl **guard** — so the plain search above always
+answers first, with a generic priest or guard, before a nickname table would
+ever get a turn. Nothing is lost by it: typing `zily` or `kree` finds Commander
+Zilyana or Kree'arra today anyway, through that same ordinary search, with no
+nickname table involved at all.
 
 ### It offers, it doesn't guess
 
@@ -320,7 +355,7 @@ its basis attached, and pasting a stretch of that log almost always settles it.
 
 ```bash
 ./gradlew build   # compile + package; also proves the JDK + wrapper work
-./gradlew test    # runs the 524-test JUnit suite
+./gradlew test    # runs the 545-test JUnit suite
 ./gradlew run     # launches a full RuneLite dev client with the plugin loaded
 ```
 
@@ -388,6 +423,67 @@ name holding a separator stopped resolving after a restart. And a config change
 did its work on the Swing thread while the client thread was inserting into the
 maps it walked. All four are fixed, and the twelve mutations covering them are in
 the count above.
+
+Nickname resolution added nineteen more tests across the zero-match guard, the
+alias table, the tier that owns up to a rewrite, and the panel that has to say
+one happened. Breaking the guard so alias expansion ran even when the raw search
+already had an answer turned "abby" — one edit from both Abyssal monsters through
+the ordinary near tier — into a false claim that it had been rewritten; relabelling
+a nickname hit back to whatever tier the rewritten string happened to land on made
+three separate tests fail, because a caller that cannot tell a nickname from a
+real name cannot tell the player either. Breaking a table entry — mapping
+`bandos` to the wrong God Wars boss — turned up in three places at once: the
+table's own test, the search that used it, and the settings field's `resolve`,
+which shares the same fallback and so inherited the same wrong answer. All of it
+was restored afterward with a byte-for-byte diff against the original to prove
+the mutation, not a leftover, was what changed the result.
+
+The starting list of nicknames was twenty entries, guessed at before anything
+was checked against the tiers already in place. Verifying every one against
+`MonsterIndex.search` directly — not by reasoning about it — found that about
+half of them never fire at all: `cerb`, `sire`, `scorp`, `calli`, `mole`,
+`crazy arch` and `deranged arch` are already found by the plain prefix or
+substring tier the moment they're typed alone; `gargs` and `thermy` are the
+same story one tier over, already found by the near tier instead — `gargoyle`
+diverges from `gargs` at the fifth character and `thermonuclear` diverges from
+`thermy` at the sixth, both well inside the budget a query that length is
+forgiven. Either way, the rule that alias expansion only runs on a total miss
+means the table entry for each of them is dead code — correct, but never
+reached. `revs` makes it ten of the twenty: the near tier already reaches
+every Revenant at the same one-edit distance "dagganoth" reaches the Dagannoth
+Kings, so an alias entry buys nothing there either.
+
+Nine of the remaining ten looked, at the time, like they verifiably changed an
+answer: `abby`, `dks`, `kq`, `kbd`, `bandos`, `arma`, `sara`, `zammy` and
+`venny`. A later independent review found two of those nine were never really
+answers at all. `sara` and `arma` are literal prefixes of an entirely ordinary
+NPC's name — Saradomin **priest**, Armadyl **guard** — so the plain prefix
+tier answers before the alias table's own zero-match gate ever opens, the same
+gate that keeps `revs` and the rest above from firing. That is a worse kind of
+dead than the ten already dropped: those were harmless, because the raw query
+already found the *right* monster; a live `sara` or `arma` entry would have
+silently never fired at all, which reads as coverage that isn't there. What
+ships is the seven left once those two are pulled too: `abby`, `dks`, `kq`,
+`kbd`, `bandos`, `zammy` and `venny`. `corp` was the closest call among the
+ones dropped from the start — bare `corp` already finds Corporeal Beast,
+bundled with a `Scorpia` collision neither this feature nor the one it stands
+on can fix — and it was left out with the others rather than kept for a
+two-word phrasing ("corp beast") this plugin's own author was not confident
+anyone actually types.
+
+That same later review also caught a defect in how a nickname hit gets
+relabelled `Tier.ALIAS`: the relabelling built its `Match` with the four-argument
+constructor, which resets `distance` to zero, and then re-sorted the relabelled
+list with a comparator that — once every match shares one tier and one
+zeroed-out distance — has nothing left to order by but name, discarding
+whatever order the real tier and distance had already earned. Dormant today
+because the seven shipped entries happen to produce uniform-tier matches, but a
+real defect waiting for the next one that doesn't. Fixed by sorting on the
+original tier and distance before relabelling rather than after, and carrying
+the real distance onto the relabelled match instead of zeroing it. Pinned by a
+test in the same shape as the mutation: two synthetic near-tier matches, one
+edit and two edits away, named so alphabetical order disagrees with distance
+order — reverting the fix puts the two-edit match first.
 
 Compile target is Java 11 bytecode. The RuneLite client version is pinned in
 `build.gradle` (1.12.38) rather than left on `latest.release`, so a local build
